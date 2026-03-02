@@ -14,7 +14,7 @@ from publisher import publish_playbook
 REQUIRED_ENV_VARS = [
     "GROQ_API_KEY",
     "NOTION_TOKEN",
-    "NOTION_PARENT_PAGE_ID",
+    "NOTION_DB_ID",
     "SHEET_ID",
 ]
 

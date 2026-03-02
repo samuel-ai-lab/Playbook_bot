@@ -95,29 +95,58 @@ def _chunk(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]
     return [items[index : index + size] for index in range(0, len(items), size)]
 
 
-def _page_title_property(playbook: dict) -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "text",
-            "text": {"content": _truncate_text(playbook.get("title", "Untitled Playbook"), 200)},
+def _title_property_name(db_schema: dict[str, Any]) -> str:
+    for name, metadata in db_schema.items():
+        if metadata.get("type") == "title":
+            return name
+    return "Name"
+
+
+def _find_multi_select_name(db_schema: dict[str, Any]) -> str | None:
+    for name, metadata in db_schema.items():
+        if metadata.get("type") == "multi_select":
+            return name
+    return None
+
+
+def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) -> dict[str, Any]:
+    db = notion.databases.retrieve(database_id=db_id)
+    db_schema = db.get("properties", {})
+
+    title_prop = _title_property_name(db_schema)
+    properties: dict[str, Any] = {
+        title_prop: {
+            "title": [
+                {
+                    "type": "text",
+                    "text": {"content": _truncate_text(playbook.get("title", "Untitled Playbook"), 200)},
+                }
+            ]
         }
-    ]
+    }
+
+    tags_prop = _find_multi_select_name(db_schema)
+    tags = playbook.get("tags", [])
+    if tags_prop and tags:
+        properties[tags_prop] = {"multi_select": [{"name": _truncate_text(tag, 100)} for tag in tags]}
+
+    return properties
 
 
 def publish_playbook(playbook: dict, source_url: str = "") -> str:
     notion_token = os.getenv("NOTION_TOKEN")
-    notion_parent_page_id = os.getenv("NOTION_PARENT_PAGE_ID")
+    notion_db_id = os.getenv("NOTION_DB_ID")
 
     if not notion_token:
         raise RuntimeError("Missing NOTION_TOKEN")
-    if not notion_parent_page_id:
-        raise RuntimeError("Missing NOTION_PARENT_PAGE_ID")
+    if not notion_db_id:
+        raise RuntimeError("Missing NOTION_DB_ID")
 
     notion = Client(auth=notion_token)
 
     page = notion.pages.create(
-        parent={"page_id": notion_parent_page_id},
-        properties={"title": _page_title_property(playbook)},
+        parent={"database_id": notion_db_id},
+        properties=_page_properties_for_database(notion, notion_db_id, playbook),
     )
     page_id = page["id"]
 

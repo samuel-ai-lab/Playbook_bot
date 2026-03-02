@@ -10,7 +10,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 
 - `GROQ_API_KEY`
 - `NOTION_TOKEN`
-- `NOTION_PARENT_PAGE_ID` (the page that will receive generated playbooks as child pages)
+- `NOTION_DB_ID` (database where each generated playbook is created as a page item)
 - `G_SHEETS_JSON` (stringified Google service account JSON)
   or `G_SHEETS_JSON_B64` (base64-encoded service account JSON)
 - `SHEET_ID`
