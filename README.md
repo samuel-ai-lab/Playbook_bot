@@ -61,6 +61,8 @@ Set one GitHub Actions secret:
 
 Optional for YouTube bot-check protected videos:
 - `YTDLP_COOKIES_TXT`: full exported `cookies.txt` content from a signed-in browser session.
+  If it exceeds GitHub secret size limits, use split secrets instead:
+  `YTDLP_COOKIES_TXT_P1` ... `YTDLP_COOKIES_TXT_P6`.
 
 ## Google Sheet columns
 

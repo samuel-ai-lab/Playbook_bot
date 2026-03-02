@@ -35,9 +35,32 @@ jobs:
       - name: Write yt-dlp cookies file (optional)
         env:
           YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
+          YTDLP_COOKIES_TXT_P1: ${{ secrets.YTDLP_COOKIES_TXT_P1 }}
+          YTDLP_COOKIES_TXT_P2: ${{ secrets.YTDLP_COOKIES_TXT_P2 }}
+          YTDLP_COOKIES_TXT_P3: ${{ secrets.YTDLP_COOKIES_TXT_P3 }}
+          YTDLP_COOKIES_TXT_P4: ${{ secrets.YTDLP_COOKIES_TXT_P4 }}
+          YTDLP_COOKIES_TXT_P5: ${{ secrets.YTDLP_COOKIES_TXT_P5 }}
+          YTDLP_COOKIES_TXT_P6: ${{ secrets.YTDLP_COOKIES_TXT_P6 }}
         run: |
           if [ -n "$YTDLP_COOKIES_TXT" ]; then
             printf "%s" "$YTDLP_COOKIES_TXT" > /tmp/ytdlp_cookies.txt
+          elif [ -n "$YTDLP_COOKIES_TXT_P1" ]; then
+            : > /tmp/ytdlp_cookies.txt
+            for part in \
+              "$YTDLP_COOKIES_TXT_P1" \
+              "$YTDLP_COOKIES_TXT_P2" \
+              "$YTDLP_COOKIES_TXT_P3" \
+              "$YTDLP_COOKIES_TXT_P4" \
+              "$YTDLP_COOKIES_TXT_P5" \
+              "$YTDLP_COOKIES_TXT_P6"
+            do
+              if [ -n "$part" ]; then
+                printf "%s" "$part" >> /tmp/ytdlp_cookies.txt
+              fi
+            done
+          fi
+
+          if [ -s /tmp/ytdlp_cookies.txt ]; then
             printf "\nYTDLP_COOKIES_FILE=/tmp/ytdlp_cookies.txt\n" >> .env
           fi
 
