@@ -1,5 +1,8 @@
 import json
 import os
+import random
+import re
+import time
 from typing import Any
 
 import requests
@@ -60,9 +63,32 @@ Rules:
 - Do not include markdown, prose, or extra keys.
 """.strip()
 
+LONG_VIDEO_MERGE_SYSTEM_PROMPT = """
+You are a Senior Business Consultant combining analyses from a long-form transcript (over 1 hour).
+Return ONLY a JSON object with this exact schema:
+{
+  "title": string,
+  "summary": string,
+  "action_steps": string[],
+  "insights": string[],
+  "tags": string[]
+}
+Rules:
+- Preserve full context coverage: beginning, middle, and end of the source.
+- Prioritize durable themes and high-leverage tactics over minute-level details.
+- In summary, provide a coherent narrative arc plus key outcomes.
+- action_steps should be concise, executable, and de-duplicated.
+- insights should capture strategic patterns that appeared repeatedly.
+- Keep tags compact and de-duplicated.
+- Do not include markdown, prose, or extra keys.
+""".strip()
+
 
 class _PayloadTooLargeError(RuntimeError):
     pass
+
+
+_LAST_LLM_CALL_TS = 0.0
 
 
 def _ensure_string(value: Any, fallback: str = "") -> str:
@@ -137,10 +163,56 @@ def _chat_json(
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
-    if response.status_code == 413:
-        raise _PayloadTooLargeError("LLM request payload too large.")
-    response.raise_for_status()
+
+    max_retries = int(os.getenv("BRAIN_LLM_MAX_RETRIES", "6"))
+    retry_base_sec = float(os.getenv("BRAIN_LLM_RETRY_BASE_SEC", "1.5"))
+    max_backoff_sec = float(os.getenv("BRAIN_LLM_MAX_BACKOFF_SEC", "45"))
+    min_interval_sec = float(os.getenv("BRAIN_LLM_MIN_INTERVAL_SEC", "0.35"))
+
+    response = None
+    for attempt in range(max_retries + 1):
+        global _LAST_LLM_CALL_TS
+        elapsed = time.time() - _LAST_LLM_CALL_TS
+        if min_interval_sec > 0 and elapsed < min_interval_sec:
+            time.sleep(min_interval_sec - elapsed)
+
+        try:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
+        except requests.RequestException as exc:
+            if attempt >= max_retries:
+                raise RuntimeError(f"LLM request failed after retries: {exc}") from exc
+            sleep_for = min(max_backoff_sec, retry_base_sec * (2**attempt)) + random.uniform(0, 0.5)
+            time.sleep(sleep_for)
+            continue
+        finally:
+            _LAST_LLM_CALL_TS = time.time()
+
+        if response.status_code == 413:
+            raise _PayloadTooLargeError("LLM request payload too large.")
+
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt >= max_retries:
+                response.raise_for_status()
+
+            retry_after_hdr = response.headers.get("Retry-After", "").strip()
+            retry_after_sec = 0.0
+            if retry_after_hdr:
+                try:
+                    retry_after_sec = float(retry_after_hdr)
+                except ValueError:
+                    retry_after_sec = 0.0
+
+            backoff_sec = min(max_backoff_sec, retry_base_sec * (2**attempt))
+            sleep_for = max(retry_after_sec, backoff_sec) + random.uniform(0, 0.5)
+            time.sleep(sleep_for)
+            continue
+
+        response.raise_for_status()
+        break
+
+    if response is None:
+        raise RuntimeError("LLM request failed before receiving a response.")
+
     body = response.json()
 
     content = body.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
@@ -167,12 +239,20 @@ def _compact_analysis(item: dict) -> dict:
     }
 
 
+def _estimate_duration_seconds_from_transcript(transcript_text: str) -> int:
+    words = re.findall(r"\b\w+\b", transcript_text)
+    # Rough speech density estimate for long-form business content.
+    words_per_minute = 150
+    return int((len(words) / max(1, words_per_minute)) * 60)
+
+
 def _merge_batch(
     endpoint: str,
     headers: dict[str, str],
     model: str,
     source_url: str,
     analyses_batch: list[dict],
+    merge_system_prompt: str,
 ) -> dict:
     merge_prompt = (
         f"Source URL: {source_url}\n\n"
@@ -185,7 +265,7 @@ def _merge_batch(
         headers=headers,
         model=model,
         messages=[
-            {"role": "system", "content": MERGE_SYSTEM_PROMPT},
+            {"role": "system", "content": merge_system_prompt},
             {"role": "user", "content": merge_prompt},
         ],
         temperature=0.15,
@@ -201,6 +281,7 @@ def _merge_analyses_hierarchical(
     source_url: str,
     analyses: list[dict],
     initial_batch_size: int,
+    merge_system_prompt: str,
 ) -> dict:
     if not analyses:
         raise RuntimeError("No chunk analyses to merge.")
@@ -218,14 +299,25 @@ def _merge_analyses_hierarchical(
                 next_round.append(batch[0])
                 continue
             try:
-                next_round.append(_merge_batch(endpoint, headers, model, source_url, batch))
+                next_round.append(
+                    _merge_batch(endpoint, headers, model, source_url, batch, merge_system_prompt=merge_system_prompt)
+                )
             except _PayloadTooLargeError:
                 if batch_size > 2:
                     batch_size = max(2, batch_size // 2)
                     restart_level = True
                     break
                 compact = [_compact_analysis(item) for item in batch]
-                next_round.append(_merge_batch(endpoint, headers, model, source_url, compact))
+                next_round.append(
+                    _merge_batch(
+                        endpoint,
+                        headers,
+                        model,
+                        source_url,
+                        compact,
+                        merge_system_prompt=merge_system_prompt,
+                    )
+                )
 
         if restart_level:
             continue
@@ -349,6 +441,7 @@ def _chunked_playbook(
     max_chunks: int,
     merge_batch_size: int,
     min_chunk_chars: int,
+    long_video_mode: bool,
 ) -> dict:
     chunks = _split_text(transcript_text, chunk_chars=chunk_chars, max_chunks=max_chunks)
     if not chunks:
@@ -376,10 +469,11 @@ def _chunked_playbook(
         source_url=source_url,
         analyses=analyses,
         initial_batch_size=merge_batch_size,
+        merge_system_prompt=LONG_VIDEO_MERGE_SYSTEM_PROMPT if long_video_mode else MERGE_SYSTEM_PROMPT,
     )
 
 
-def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
+def generate_playbook(transcript_text: str, source_url: str = "", duration_seconds: int | None = None) -> dict:
     api_key = os.getenv("GROQ_API_KEY")
     groq_base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
     groq_llm_model = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
@@ -387,6 +481,7 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
     max_chunks = int(os.getenv("BRAIN_MAX_CHUNKS", "200"))
     merge_batch_size = int(os.getenv("BRAIN_MERGE_BATCH_SIZE", "8"))
     min_chunk_chars = int(os.getenv("BRAIN_MIN_CHUNK_CHARS", "8000"))
+    long_video_seconds = int(os.getenv("BRAIN_LONG_VIDEO_SECONDS", "3600"))
 
     if not api_key:
         raise RuntimeError("Missing GROQ_API_KEY")
@@ -395,6 +490,11 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
 
     endpoint = f"{groq_base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    effective_duration = duration_seconds if isinstance(duration_seconds, int) and duration_seconds > 0 else None
+    if effective_duration is None:
+        effective_duration = _estimate_duration_seconds_from_transcript(transcript_text)
+    long_video_mode = effective_duration > long_video_seconds
 
     if len(transcript_text) <= chunk_chars:
         return _single_pass_playbook(endpoint, headers, groq_llm_model, transcript_text, source_url)
@@ -408,4 +508,5 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
         max_chunks=max_chunks,
         merge_batch_size=merge_batch_size,
         min_chunk_chars=min_chunk_chars,
+        long_video_mode=long_video_mode,
     )

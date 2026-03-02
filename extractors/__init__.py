@@ -1,5 +1,10 @@
 from .instagram import extract_instagram_transcript, extract_media_transcript
-from .youtube import extract_youtube_transcript, extract_youtube_transcript_with_ytdlp, parse_youtube_id
+from .youtube import (
+    extract_youtube_duration_seconds,
+    extract_youtube_transcript,
+    extract_youtube_transcript_with_ytdlp,
+    parse_youtube_id,
+)
 
 
 def extract_transcript(url: str) -> tuple[str, dict]:
@@ -7,19 +12,26 @@ def extract_transcript(url: str) -> tuple[str, dict]:
 
     if "youtube.com" in lowered or "youtu.be" in lowered:
         video_id = parse_youtube_id(url)
+        duration_seconds = extract_youtube_duration_seconds(url)
         try:
             transcript = extract_youtube_transcript(video_id)
-            return transcript, {"source": "youtube", "video_id": video_id}
+            return transcript, {"source": "youtube", "video_id": video_id, "duration_seconds": duration_seconds}
         except Exception as primary_exc:
             try:
                 transcript = extract_youtube_transcript_with_ytdlp(url)
-                return transcript, {"source": "youtube_caption_fallback", "video_id": video_id, "reason": str(primary_exc)}
+                return transcript, {
+                    "source": "youtube_caption_fallback",
+                    "video_id": video_id,
+                    "duration_seconds": duration_seconds,
+                    "reason": str(primary_exc),
+                }
             except Exception as secondary_exc:
                 # Some videos have no usable caption tracks; fall back to audio transcription.
                 transcript = extract_media_transcript(url)
                 return {
                     "source": "youtube_audio_fallback",
                     "video_id": video_id,
+                    "duration_seconds": duration_seconds,
                     "reason": f"{primary_exc}; {secondary_exc}",
                 }
 

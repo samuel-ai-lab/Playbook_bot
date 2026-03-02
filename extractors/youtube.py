@@ -170,6 +170,40 @@ def extract_youtube_transcript_with_ytdlp(video_url: str) -> str:
     raise RuntimeError("No usable subtitle/auto-caption tracks found via yt-dlp.")
 
 
+def extract_youtube_duration_seconds(video_url: str) -> int | None:
+    try:
+        import yt_dlp
+    except ImportError:
+        return None
+
+    ydl_opts: dict = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+        "ignore_no_formats_error": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "web", "ios", "tv"]}},
+    }
+    cookies_file = os.getenv("YTDLP_COOKIES_FILE", "").strip()
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
+    cookies_from_browser = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
+    if cookies_from_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+    except Exception:
+        return None
+
+    if isinstance(info, dict):
+        duration = info.get("duration")
+        if isinstance(duration, (int, float)) and duration > 0:
+            return int(duration)
+    return None
+
+
 def extract_youtube_transcript(video_id: str) -> str:
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)

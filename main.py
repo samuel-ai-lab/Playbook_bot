@@ -134,7 +134,11 @@ def _process_row(
     _update_if_present(worksheet, header_map, row_number, STATUS_COL, STATUS_IN_PROGRESS)
 
     transcript, metadata = extract_transcript(source_url)
-    playbook = generate_playbook(transcript, source_url=source_url)
+    playbook = generate_playbook(
+        transcript,
+        source_url=source_url,
+        duration_seconds=metadata.get("duration_seconds"),
+    )
 
     title = playbook.get("title", "").strip()
     if not title:
