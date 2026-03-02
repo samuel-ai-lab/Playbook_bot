@@ -57,6 +57,9 @@ python3 main.py
 Set one GitHub Actions secret:
 - `PLAYBOOK_FACTORY_ENV`: entire `.env` content as a multiline secret value.
 
+Optional for YouTube bot-check protected videos:
+- `YTDLP_COOKIES_TXT`: full exported `cookies.txt` content from a signed-in browser session.
+
 ## Google Sheet columns
 
 Minimum columns:
