@@ -116,6 +116,65 @@ def _download_media_with_ytdlp(source_url: str) -> tuple[str, str]:
                 continue
 
     if info is None:
+        # Fallback: pick concrete format IDs from metadata instead of relying on selectors.
+        if is_youtube:
+            try:
+                meta_opts = dict(ydl_base_opts)
+                meta_opts["skip_download"] = True
+                meta_opts["ignore_no_formats_error"] = True
+                meta_opts["extractor_args"] = {
+                    "youtube": {
+                        "player_client": ["android", "ios", "tv", "web"],
+                        "formats": ["missing_pot"],
+                    }
+                }
+                with yt_dlp.YoutubeDL(meta_opts) as ydl:
+                    metadata = ydl.extract_info(normalized_url, download=False)
+
+                formats = metadata.get("formats", []) if isinstance(metadata, dict) else []
+                audio_only: list[tuple[str, float]] = []
+                audio_any: list[tuple[str, float]] = []
+                for fmt in formats:
+                    if not isinstance(fmt, dict):
+                        continue
+                    format_id = fmt.get("format_id")
+                    if not isinstance(format_id, str) or not format_id:
+                        continue
+                    acodec = str(fmt.get("acodec", "none"))
+                    if acodec == "none":
+                        continue
+                    quality = float(fmt.get("abr") or fmt.get("tbr") or 999999)
+                    if str(fmt.get("vcodec", "none")) == "none":
+                        audio_only.append((format_id, quality))
+                    else:
+                        audio_any.append((format_id, quality))
+
+                candidates = sorted(audio_only or audio_any, key=lambda item: item[1])
+                tried: set[str] = set()
+                for format_id, _ in candidates:
+                    if format_id in tried:
+                        continue
+                    tried.add(format_id)
+                    opts = dict(ydl_base_opts)
+                    opts["extractor_args"] = {
+                        "youtube": {
+                            "player_client": ["android", "ios", "tv", "web"],
+                            "formats": ["missing_pot"],
+                        }
+                    }
+                    opts["format"] = format_id
+                    try:
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            info = ydl.extract_info(normalized_url, download=True)
+                            downloaded_path = ydl.prepare_filename(info)
+                        last_exc = None
+                        break
+                    except DownloadError as exc:
+                        last_exc = exc
+                        continue
+            except Exception as exc:
+                last_exc = exc
+
         if last_exc:
             raise last_exc
         raise RuntimeError("yt-dlp could not download media from the provided URL.")

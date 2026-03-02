@@ -126,6 +126,7 @@ def extract_youtube_transcript_with_ytdlp(video_url: str) -> str:
 
     ydl_opts: dict = {
         "skip_download": True,
+        "ignore_no_formats_error": True,
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
