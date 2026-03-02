@@ -27,6 +27,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `GROQ_LLM_MODEL` (default: `openai/gpt-oss-120b`)
 - `BRAIN_TRANSCRIPT_CHUNK_CHARS` (default: `40000`; LLM chunk size for full transcript processing)
 - `BRAIN_MAX_CHUNKS` (default: `200`; safety cap for extreme transcript lengths)
+- `BRAIN_MERGE_BATCH_SIZE` (default: `8`; chunk-analysis merge batch size to avoid payload limits)
 - `GROQ_WHISPER_MODEL` (default: `whisper-large-v3`)
 - `USE_GROQ_WHISPER` (default: `true`)
 - `GROQ_MAX_UPLOAD_BYTES` (default: `24000000`)

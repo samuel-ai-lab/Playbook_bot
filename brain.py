@@ -61,6 +61,10 @@ Rules:
 """.strip()
 
 
+class _PayloadTooLargeError(RuntimeError):
+    pass
+
+
 def _ensure_string(value: Any, fallback: str = "") -> str:
     return value.strip() if isinstance(value, str) else fallback
 
@@ -134,6 +138,8 @@ def _chat_json(
         "response_format": {"type": "json_object"},
     }
     response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
+    if response.status_code == 413:
+        raise _PayloadTooLargeError("LLM request payload too large.")
     response.raise_for_status()
     body = response.json()
 
@@ -149,6 +155,83 @@ def _chat_json(
     if not isinstance(parsed, dict):
         raise RuntimeError(f"Expected JSON object, got: {type(parsed)}")
     return parsed
+
+
+def _compact_analysis(item: dict) -> dict:
+    return {
+        "title": _ensure_string(item.get("title"), "")[:140],
+        "summary": _ensure_string(item.get("summary"), "")[:500],
+        "action_steps": [_ensure_string(step)[:220] for step in _ensure_string_list(item.get("action_steps"))[:10]],
+        "insights": [_ensure_string(step)[:220] for step in _ensure_string_list(item.get("insights"))[:10]],
+        "tags": [_ensure_string(tag)[:40] for tag in _ensure_string_list(item.get("tags"))[:10]],
+    }
+
+
+def _merge_batch(
+    endpoint: str,
+    headers: dict[str, str],
+    model: str,
+    source_url: str,
+    analyses_batch: list[dict],
+) -> dict:
+    merge_prompt = (
+        f"Source URL: {source_url}\n\n"
+        "Combine these chunk analyses into one final playbook JSON:\n"
+        f"{json.dumps(analyses_batch, ensure_ascii=True)}\n\n"
+        "Produce the final merged JSON now."
+    )
+    merged = _chat_json(
+        endpoint=endpoint,
+        headers=headers,
+        model=model,
+        messages=[
+            {"role": "system", "content": MERGE_SYSTEM_PROMPT},
+            {"role": "user", "content": merge_prompt},
+        ],
+        temperature=0.15,
+        timeout_seconds=240,
+    )
+    return _normalize_payload(merged)
+
+
+def _merge_analyses_hierarchical(
+    endpoint: str,
+    headers: dict[str, str],
+    model: str,
+    source_url: str,
+    analyses: list[dict],
+    initial_batch_size: int,
+) -> dict:
+    if not analyses:
+        raise RuntimeError("No chunk analyses to merge.")
+
+    current = analyses
+    batch_size = max(2, initial_batch_size)
+
+    while len(current) > 1:
+        next_round: list[dict] = []
+        restart_level = False
+
+        for i in range(0, len(current), batch_size):
+            batch = current[i : i + batch_size]
+            if len(batch) == 1:
+                next_round.append(batch[0])
+                continue
+            try:
+                next_round.append(_merge_batch(endpoint, headers, model, source_url, batch))
+            except _PayloadTooLargeError:
+                if batch_size > 2:
+                    batch_size = max(2, batch_size // 2)
+                    restart_level = True
+                    break
+                compact = [_compact_analysis(item) for item in batch]
+                next_round.append(_merge_batch(endpoint, headers, model, source_url, compact))
+
+        if restart_level:
+            continue
+        current = next_round
+
+    return _normalize_payload(current[0])
 
 
 def _single_pass_playbook(
@@ -185,6 +268,7 @@ def _chunked_playbook(
     source_url: str,
     chunk_chars: int,
     max_chunks: int,
+    merge_batch_size: int,
 ) -> dict:
     chunks = _split_text(transcript_text, chunk_chars=chunk_chars, max_chunks=max_chunks)
     if not chunks:
@@ -199,37 +283,32 @@ def _chunked_playbook(
             f"Transcript chunk:\n{chunk}\n\n"
             "Produce the JSON now."
         )
-        parsed = _chat_json(
-            endpoint=endpoint,
-            headers=headers,
-            model=model,
-            messages=[
-                {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            timeout_seconds=180,
-        )
+        try:
+            parsed = _chat_json(
+                endpoint=endpoint,
+                headers=headers,
+                model=model,
+                messages=[
+                    {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                timeout_seconds=180,
+            )
+        except _PayloadTooLargeError as exc:
+            raise RuntimeError(
+                "Chunk request exceeded payload size. Reduce BRAIN_TRANSCRIPT_CHUNK_CHARS (e.g. 25000)."
+            ) from exc
         analyses.append(_normalize_payload(parsed))
 
-    merge_prompt = (
-        f"Source URL: {source_url}\n\n"
-        "Combine these chunk analyses into one final playbook JSON:\n"
-        f"{json.dumps(analyses, ensure_ascii=True)}\n\n"
-        "Produce the final merged JSON now."
-    )
-    merged = _chat_json(
+    return _merge_analyses_hierarchical(
         endpoint=endpoint,
         headers=headers,
         model=model,
-        messages=[
-            {"role": "system", "content": MERGE_SYSTEM_PROMPT},
-            {"role": "user", "content": merge_prompt},
-        ],
-        temperature=0.15,
-        timeout_seconds=240,
+        source_url=source_url,
+        analyses=analyses,
+        initial_batch_size=merge_batch_size,
     )
-    return _normalize_payload(merged)
 
 
 def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
@@ -238,6 +317,7 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
     groq_llm_model = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
     chunk_chars = int(os.getenv("BRAIN_TRANSCRIPT_CHUNK_CHARS", "40000"))
     max_chunks = int(os.getenv("BRAIN_MAX_CHUNKS", "200"))
+    merge_batch_size = int(os.getenv("BRAIN_MERGE_BATCH_SIZE", "8"))
 
     if not api_key:
         raise RuntimeError("Missing GROQ_API_KEY")
@@ -257,4 +337,5 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
         source_url=source_url,
         chunk_chars=chunk_chars,
         max_chunks=max_chunks,
+        merge_batch_size=merge_batch_size,
     )
