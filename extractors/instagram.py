@@ -34,8 +34,7 @@ def _download_media_with_ytdlp(source_url: str) -> tuple[str, str]:
     temp_dir = tempfile.mkdtemp(prefix="playbook_media_")
     outtmpl = str(Path(temp_dir) / "media.%(ext)s")
 
-    ydl_opts: dict = {
-        "format": "worstaudio[abr<=64]/worstaudio/bestaudio[abr<=64]/bestaudio/best",
+    ydl_base_opts: dict = {
         "noplaylist": True,
         "outtmpl": outtmpl,
         "quiet": True,
@@ -53,28 +52,48 @@ def _download_media_with_ytdlp(source_url: str) -> tuple[str, str]:
     }
     cookies_file = os.getenv("YTDLP_COOKIES_FILE", "").strip()
     if cookies_file:
-        ydl_opts["cookiefile"] = cookies_file
+        ydl_base_opts["cookiefile"] = cookies_file
     cookies_from_browser = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
     if cookies_from_browser:
-        ydl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
+        ydl_base_opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
     info = None
     downloaded_path = ""
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(normalized_url, download=True)
-            downloaded_path = ydl.prepare_filename(info)
-    except DownloadError as first_exc:
-        # YouTube sometimes returns 403 on default client selection.
-        is_youtube = "youtube.com" in normalized_url or "youtu.be" in normalized_url
-        if not is_youtube:
-            raise first_exc
-        retry_opts = dict(ydl_opts)
+    last_exc: Exception | None = None
+    is_youtube = "youtube.com" in normalized_url or "youtu.be" in normalized_url
+
+    format_candidates = [
+        "worstaudio[abr<=64]/worstaudio/bestaudio[abr<=64]/bestaudio/best",
+        "bestaudio/best",
+        "worstaudio/worst",
+        "best",
+    ]
+    option_sets: list[dict] = [dict(ydl_base_opts)]
+    if is_youtube:
+        retry_opts = dict(ydl_base_opts)
         retry_opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
-        retry_opts["format"] = "worstaudio[protocol!=m3u8]/worstaudio/bestaudio[protocol!=m3u8]/bestaudio/best"
-        with yt_dlp.YoutubeDL(retry_opts) as ydl:
-            info = ydl.extract_info(normalized_url, download=True)
-            downloaded_path = ydl.prepare_filename(info)
+        option_sets.append(retry_opts)
+
+    for base_opts in option_sets:
+        for fmt in format_candidates:
+            opts = dict(base_opts)
+            opts["format"] = fmt
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(normalized_url, download=True)
+                    downloaded_path = ydl.prepare_filename(info)
+                last_exc = None
+                break
+            except DownloadError as exc:
+                last_exc = exc
+                continue
+        if info is not None:
+            break
+
+    if info is None:
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("yt-dlp could not download media from the provided URL.")
 
     candidate_paths = []
     if downloaded_path and os.path.exists(downloaded_path):
