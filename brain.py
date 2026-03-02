@@ -234,6 +234,85 @@ def _merge_analyses_hierarchical(
     return _normalize_payload(current[0])
 
 
+def _split_chunk_for_retry(text: str) -> list[str]:
+    cleaned = text.strip()
+    if len(cleaned) < 2:
+        return [cleaned]
+
+    mid = len(cleaned) // 2
+    left_break = cleaned.rfind("\n", int(len(cleaned) * 0.3), mid)
+    if left_break == -1:
+        right_break = cleaned.find("\n", mid, int(len(cleaned) * 0.7))
+        split_at = right_break if right_break != -1 else mid
+    else:
+        split_at = left_break
+
+    first = cleaned[:split_at].strip()
+    second = cleaned[split_at:].strip()
+    if not first or not second:
+        split_at = mid
+        first = cleaned[:split_at].strip()
+        second = cleaned[split_at:].strip()
+
+    return [part for part in [first, second] if part]
+
+
+def _analyze_chunk_resilient(
+    endpoint: str,
+    headers: dict[str, str],
+    model: str,
+    source_url: str,
+    chunk: str,
+    chunk_label: str,
+    min_chunk_chars: int,
+) -> list[dict]:
+    user_prompt = (
+        f"Source URL: {source_url}\n"
+        f"Chunk: {chunk_label}\n\n"
+        f"Transcript chunk:\n{chunk}\n\n"
+        "Produce the JSON now."
+    )
+
+    try:
+        parsed = _chat_json(
+            endpoint=endpoint,
+            headers=headers,
+            model=model,
+            messages=[
+                {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            timeout_seconds=180,
+        )
+        return [_normalize_payload(parsed)]
+    except _PayloadTooLargeError:
+        if len(chunk) <= min_chunk_chars:
+            raise RuntimeError(
+                "Chunk request exceeded payload size at minimum split. "
+                "Reduce BRAIN_MIN_CHUNK_CHARS (e.g. 4000) or shorten transcript input."
+            )
+
+        sub_chunks = _split_chunk_for_retry(chunk)
+        if len(sub_chunks) < 2:
+            raise RuntimeError("Chunk request exceeded payload size and could not split further.")
+
+        analyses: list[dict] = []
+        for index, sub_chunk in enumerate(sub_chunks, start=1):
+            analyses.extend(
+                _analyze_chunk_resilient(
+                    endpoint=endpoint,
+                    headers=headers,
+                    model=model,
+                    source_url=source_url,
+                    chunk=sub_chunk,
+                    chunk_label=f"{chunk_label}.{index}",
+                    min_chunk_chars=min_chunk_chars,
+                )
+            )
+        return analyses
+
+
 def _single_pass_playbook(
     endpoint: str,
     headers: dict[str, str],
@@ -269,6 +348,7 @@ def _chunked_playbook(
     chunk_chars: int,
     max_chunks: int,
     merge_batch_size: int,
+    min_chunk_chars: int,
 ) -> dict:
     chunks = _split_text(transcript_text, chunk_chars=chunk_chars, max_chunks=max_chunks)
     if not chunks:
@@ -277,29 +357,17 @@ def _chunked_playbook(
     analyses: list[dict] = []
     total = len(chunks)
     for index, chunk in enumerate(chunks, start=1):
-        user_prompt = (
-            f"Source URL: {source_url}\n"
-            f"Chunk: {index}/{total}\n\n"
-            f"Transcript chunk:\n{chunk}\n\n"
-            "Produce the JSON now."
-        )
-        try:
-            parsed = _chat_json(
+        analyses.extend(
+            _analyze_chunk_resilient(
                 endpoint=endpoint,
                 headers=headers,
                 model=model,
-                messages=[
-                    {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-                timeout_seconds=180,
+                source_url=source_url,
+                chunk=chunk,
+                chunk_label=f"{index}/{total}",
+                min_chunk_chars=min_chunk_chars,
             )
-        except _PayloadTooLargeError as exc:
-            raise RuntimeError(
-                "Chunk request exceeded payload size. Reduce BRAIN_TRANSCRIPT_CHUNK_CHARS (e.g. 25000)."
-            ) from exc
-        analyses.append(_normalize_payload(parsed))
+        )
 
     return _merge_analyses_hierarchical(
         endpoint=endpoint,
@@ -318,6 +386,7 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
     chunk_chars = int(os.getenv("BRAIN_TRANSCRIPT_CHUNK_CHARS", "40000"))
     max_chunks = int(os.getenv("BRAIN_MAX_CHUNKS", "200"))
     merge_batch_size = int(os.getenv("BRAIN_MERGE_BATCH_SIZE", "8"))
+    min_chunk_chars = int(os.getenv("BRAIN_MIN_CHUNK_CHARS", "8000"))
 
     if not api_key:
         raise RuntimeError("Missing GROQ_API_KEY")
@@ -338,4 +407,5 @@ def generate_playbook(transcript_text: str, source_url: str = "") -> dict:
         chunk_chars=chunk_chars,
         max_chunks=max_chunks,
         merge_batch_size=merge_batch_size,
+        min_chunk_chars=min_chunk_chars,
     )
