@@ -90,6 +90,21 @@ def _download_media_with_ytdlp(source_url: str) -> tuple[str, str]:
         if info is not None:
             break
 
+    # Final fallback: let yt-dlp choose default format without constraints.
+    if info is None:
+        for base_opts in option_sets:
+            opts = dict(base_opts)
+            opts.pop("format", None)
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(normalized_url, download=True)
+                    downloaded_path = ydl.prepare_filename(info)
+                last_exc = None
+                break
+            except DownloadError as exc:
+                last_exc = exc
+                continue
+
     if info is None:
         if last_exc:
             raise last_exc
