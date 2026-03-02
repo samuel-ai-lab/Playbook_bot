@@ -29,10 +29,13 @@ jobs:
           printf "%s" "${{ secrets.PLAYBOOK_FACTORY_ENV }}" > .env
 
       - name: Write yt-dlp cookies file (optional)
-        if: ${{ secrets.YTDLP_COOKIES_TXT != '' }}
+        env:
+          YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
         run: |
-          printf "%s" "${{ secrets.YTDLP_COOKIES_TXT }}" > /tmp/ytdlp_cookies.txt
-          printf "\nYTDLP_COOKIES_FILE=/tmp/ytdlp_cookies.txt\n" >> .env
+          if [ -n "$YTDLP_COOKIES_TXT" ]; then
+            printf "%s" "$YTDLP_COOKIES_TXT" > /tmp/ytdlp_cookies.txt
+            printf "\nYTDLP_COOKIES_FILE=/tmp/ytdlp_cookies.txt\n" >> .env
+          fi
 
       - name: Run pipeline
         run: python main.py
