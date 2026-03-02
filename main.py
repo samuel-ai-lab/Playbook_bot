@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import traceback
@@ -14,7 +15,6 @@ REQUIRED_ENV_VARS = [
     "GROQ_API_KEY",
     "NOTION_TOKEN",
     "NOTION_PARENT_PAGE_ID",
-    "G_SHEETS_JSON",
     "SHEET_ID",
 ]
 
@@ -33,16 +33,46 @@ WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "")
 
 def _require_env() -> None:
     missing = [key for key in REQUIRED_ENV_VARS if not os.getenv(key)]
+    if not os.getenv("G_SHEETS_JSON") and not os.getenv("G_SHEETS_JSON_B64"):
+        missing.append("G_SHEETS_JSON or G_SHEETS_JSON_B64")
     if missing:
         raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
 
 
+def _parse_sheets_creds() -> dict[str, Any]:
+    raw = os.getenv("G_SHEETS_JSON", "").strip()
+    raw_b64 = os.getenv("G_SHEETS_JSON_B64", "").strip()
+
+    candidates: list[str] = []
+
+    if raw_b64:
+        try:
+            decoded = base64.b64decode(raw_b64).decode("utf-8")
+            candidates.append(decoded)
+        except Exception:
+            pass
+
+    if raw:
+        candidates.append(raw)
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+            candidates.append(raw[1:-1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    raise RuntimeError(
+        "Google Sheets credentials are malformed. Set G_SHEETS_JSON as valid JSON with double quotes, "
+        "or set G_SHEETS_JSON_B64 as base64-encoded JSON."
+    )
+
+
 def _sheet_client() -> gspread.Worksheet:
-    creds_raw = os.getenv("G_SHEETS_JSON", "")
-    try:
-        creds = json.loads(creds_raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("G_SHEETS_JSON must be a valid JSON object string") from exc
+    creds = _parse_sheets_creds()
 
     client = gspread.service_account_from_dict(creds)
     spreadsheet = client.open_by_key(os.getenv("SHEET_ID", ""))

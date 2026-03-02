@@ -12,6 +12,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `NOTION_TOKEN`
 - `NOTION_PARENT_PAGE_ID` (the page that will receive generated playbooks as child pages)
 - `G_SHEETS_JSON` (stringified Google service account JSON)
+  or `G_SHEETS_JSON_B64` (base64-encoded service account JSON)
 - `SHEET_ID`
 
 ### Optional variables
