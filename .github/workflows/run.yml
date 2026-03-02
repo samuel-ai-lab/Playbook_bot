@@ -42,9 +42,7 @@ jobs:
           YTDLP_COOKIES_TXT_P5: ${{ secrets.YTDLP_COOKIES_TXT_P5 }}
           YTDLP_COOKIES_TXT_P6: ${{ secrets.YTDLP_COOKIES_TXT_P6 }}
         run: |
-          if [ -n "$YTDLP_COOKIES_TXT" ]; then
-            printf "%s" "$YTDLP_COOKIES_TXT" > /tmp/ytdlp_cookies.txt
-          elif [ -n "$YTDLP_COOKIES_TXT_P1" ]; then
+          if [ -n "$YTDLP_COOKIES_TXT_P1" ]; then
             : > /tmp/ytdlp_cookies.txt
             for part in \
               "$YTDLP_COOKIES_TXT_P1" \
@@ -58,9 +56,13 @@ jobs:
                 printf "%s" "$part" >> /tmp/ytdlp_cookies.txt
               fi
             done
+          elif [ -n "$YTDLP_COOKIES_TXT" ]; then
+            printf "%s" "$YTDLP_COOKIES_TXT" > /tmp/ytdlp_cookies.txt
           fi
 
           if [ -s /tmp/ytdlp_cookies.txt ]; then
+            echo "Cookie file lines: $(wc -l < /tmp/ytdlp_cookies.txt)"
+            awk 'BEGIN{FS="\t"} !/^#/ {d=tolower($1); if (d ~ /(^|\\.)youtube\\.com$/) y++; if (d ~ /(^|\\.)instagram\\.com$/) i++; if (d ~ /(^|\\.)google\\.[a-z.]+$/) g++;} END{printf "Cookie domains -> youtube:%d instagram:%d google:%d\n", y+0, i+0, g+0}' /tmp/ytdlp_cookies.txt
             printf "\nYTDLP_COOKIES_FILE=/tmp/ytdlp_cookies.txt\n" >> .env
           fi
 
