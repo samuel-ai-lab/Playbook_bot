@@ -74,6 +74,16 @@ def _download_media_with_ytdlp(source_url: str) -> tuple[str, str]:
         retry_opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
         option_sets.append(retry_opts)
 
+        pot_opts = dict(ydl_base_opts)
+        # See yt-dlp issue 13058: some videos expose only formats flagged as missing PO Token.
+        pot_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "ios", "tv", "web"],
+                "formats": ["missing_pot"],
+            }
+        }
+        option_sets.append(pot_opts)
+
     for base_opts in option_sets:
         for fmt in format_candidates:
             opts = dict(base_opts)
