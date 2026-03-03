@@ -1,6 +1,7 @@
 import html
 import os
 import re
+import time
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -9,6 +10,7 @@ from youtube_transcript_api._errors import TranscriptsDisabled, VideoUnavailable
 
 
 LANGUAGE_PRIORITY = ["en", "en-US", "en-GB"]
+TRANSCRIPT_API_RETRY_STATUS = {408, 429, 503}
 
 
 def parse_youtube_id(url: str) -> str:
@@ -35,6 +37,90 @@ def parse_youtube_id(url: str) -> str:
 
 def _format_segments(segments: list[dict]) -> str:
     return "\n".join(segment.get("text", "").strip() for segment in segments if segment.get("text"))
+
+
+def _parse_transcriptapi_payload(payload: dict) -> str:
+    transcript = payload.get("transcript")
+
+    if isinstance(transcript, str):
+        return transcript.strip()
+
+    if isinstance(transcript, list):
+        lines: list[str] = []
+        for item in transcript:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                cleaned = " ".join(text.split()).strip()
+                if cleaned:
+                    lines.append(cleaned)
+        return "\n".join(lines).strip()
+
+    return ""
+
+
+def extract_youtube_transcript_with_transcriptapi(video_url: str) -> str:
+    api_key = os.getenv("TRANSCRIPT_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("TranscriptAPI key is missing. Set TRANSCRIPT_API_KEY to enable this extractor.")
+
+    base_url = os.getenv("TRANSCRIPT_API_BASE_URL", "https://transcriptapi.com").strip() or "https://transcriptapi.com"
+    timeout_seconds = int(os.getenv("TRANSCRIPT_API_TIMEOUT_SECONDS", "45"))
+    max_retries = int(os.getenv("TRANSCRIPT_API_MAX_RETRIES", "3"))
+    retry_base_seconds = float(os.getenv("TRANSCRIPT_API_RETRY_BASE_SEC", "1.5"))
+
+    endpoint = f"{base_url.rstrip('/')}/api/v2/youtube/transcript"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    params = {
+        "video_url": video_url,
+        "format": "json",
+        "include_timestamp": "false",
+    }
+
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(endpoint, headers=headers, params=params, timeout=timeout_seconds)
+        except requests.RequestException as exc:
+            if attempt >= max_retries:
+                raise RuntimeError(f"TranscriptAPI request failed after retries: {exc}") from exc
+            backoff = retry_base_seconds * (2**attempt)
+            time.sleep(backoff)
+            continue
+
+        if response.status_code in TRANSCRIPT_API_RETRY_STATUS and attempt < max_retries:
+            retry_after_hdr = response.headers.get("Retry-After", "").strip()
+            retry_after = 0.0
+            if retry_after_hdr:
+                try:
+                    retry_after = float(retry_after_hdr)
+                except ValueError:
+                    retry_after = 0.0
+
+            backoff = retry_base_seconds * (2**attempt)
+            time.sleep(max(retry_after, backoff))
+            continue
+        break
+
+    if response is None:
+        raise RuntimeError("TranscriptAPI request failed before receiving a response.")
+
+    if not response.ok:
+        details = response.text[:500]
+        raise RuntimeError(f"TranscriptAPI request failed ({response.status_code}): {details}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"TranscriptAPI returned non-JSON response: {response.text[:500]}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"TranscriptAPI returned an unexpected payload: {type(payload)}")
+
+    transcript_text = _parse_transcriptapi_payload(payload)
+    if not transcript_text:
+        raise RuntimeError("TranscriptAPI returned no usable transcript text.")
+    return transcript_text
 
 
 def _clean_caption_text(text: str) -> str:

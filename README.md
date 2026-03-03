@@ -25,6 +25,11 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `SHEET_ERROR_COL` (default: `Error`)
 - `GROQ_BASE_URL` (default: `https://api.groq.com/openai/v1`)
 - `GROQ_LLM_MODEL` (default: `openai/gpt-oss-120b`)
+- `TRANSCRIPT_API_KEY` (optional; if set, YouTube transcript fetch uses transcriptapi.com first)
+- `TRANSCRIPT_API_BASE_URL` (default: `https://transcriptapi.com`)
+- `TRANSCRIPT_API_TIMEOUT_SECONDS` (default: `45`)
+- `TRANSCRIPT_API_MAX_RETRIES` (default: `3`)
+- `TRANSCRIPT_API_RETRY_BASE_SEC` (default: `1.5`)
 - `BRAIN_TRANSCRIPT_CHUNK_CHARS` (default: `40000`; LLM chunk size for full transcript processing)
 - `BRAIN_MAX_CHUNKS` (default: `200`; safety cap for extreme transcript lengths)
 - `BRAIN_MERGE_BATCH_SIZE` (default: `8`; chunk-analysis merge batch size to avoid payload limits)
@@ -38,14 +43,31 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `USE_GROQ_WHISPER` (default: `true`)
 - `GROQ_MAX_UPLOAD_BYTES` (default: `24000000`)
 - `GROQ_AUDIO_CHUNK_SECONDS` (default: `900`)
+- `INSTAGRAM_EXTRACTOR_PROVIDER` (default: `apify`; options: `apify`, `yt-dlp`)
+- `APIFY_TOKEN` (required when `INSTAGRAM_EXTRACTOR_PROVIDER=apify`)
+- `APIFY_INSTAGRAM_ACTOR_ID` (required when `INSTAGRAM_EXTRACTOR_PROVIDER=apify`)
+- `APIFY_INSTAGRAM_INPUT_MODE` (default: `urls`; options: `urls`, `startUrls`, `directUrls`)
+- `APIFY_INSTAGRAM_EXTRA_INPUT_JSON` (optional JSON object merged into the actor input)
+- `APIFY_INSTAGRAM_TIMEOUT_SECONDS` (default: `300`)
+- `INSTAGRAM_APIFY_FALLBACK_TO_YTDLP` (default: `false`)
 - `YTDLP_COOKIES_FILE` (optional; path to exported Netscape cookies file)
 - `YTDLP_COOKIES_FROM_BROWSER` (optional; e.g. `chrome`, `brave`, `firefox`, `safari`)
+- `YOUTUBE_CAPTION_FALLBACK_ENABLED` (default: `false`; enables `yt-dlp` caption fallback for YouTube)
+- `YOUTUBE_AUDIO_FALLBACK_ENABLED` (default: `false`; enables downloader+Whisper fallback for YouTube)
+- `YOUTUBE_FETCH_DURATION` (default: `false`; when `true`, probes YouTube duration via `yt-dlp` for metadata)
+- `YOUTUBE_DOWNLOADER` (default: `pytubefix`; options: `pytubefix`, `yt-dlp`, `auto`)
 
 ## Extraction notes
 
 - Cobalt is not used.
-- URL media extraction is handled by `yt-dlp`.
-- If a YouTube video has no caption track, the pipeline falls back to `yt-dlp` + Whisper transcription.
+- Instagram defaults to API-based extraction (`INSTAGRAM_EXTRACTOR_PROVIDER=apify`) to avoid cookie/login issues.
+- If you choose the `apify` provider, set `APIFY_TOKEN` and `APIFY_INSTAGRAM_ACTOR_ID`.
+- YouTube extraction order is:
+  1) TranscriptAPI (if `TRANSCRIPT_API_KEY` is set)
+  2) `youtube-transcript-api`
+  3) `yt-dlp` subtitle/auto-caption extraction (only when `YOUTUBE_CAPTION_FALLBACK_ENABLED=true`)
+  4) downloader + Whisper transcription (only when `YOUTUBE_AUDIO_FALLBACK_ENABLED=true`)
+- By default, YouTube `yt-dlp` fallbacks are disabled.
 - If YouTube fallback returns `403 Forbidden`, set `YTDLP_COOKIES_FROM_BROWSER` (or `YTDLP_COOKIES_FILE`) and retry.
 - If Groq returns `413 Request Entity Too Large`, the pipeline auto-compresses/chunks audio (requires `ffmpeg`).
 - Transcript intelligence is fully end-to-end: long transcripts are processed in chunks and merged into one final playbook.

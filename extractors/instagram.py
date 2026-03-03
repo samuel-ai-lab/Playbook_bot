@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -204,6 +205,209 @@ def _download_media_with_ytdlp(source_url: str) -> tuple[str, str]:
     return candidate_paths[0], temp_dir
 
 
+def _download_youtube_audio_with_pytubefix(source_url: str) -> tuple[str, str]:
+    try:
+        from pytubefix import YouTube
+    except ImportError as exc:
+        raise RuntimeError("pytubefix is required for YouTube downloader strategy 'pytubefix'.") from exc
+
+    normalized_url = _normalize_source_url(source_url)
+    temp_dir = tempfile.mkdtemp(prefix="playbook_media_yt_")
+
+    yt = YouTube(normalized_url, use_oauth=False, allow_oauth_cache=False)
+    stream = (
+        yt.streams.filter(only_audio=True, file_extension="mp4").order_by("abr").desc().first()
+        or yt.streams.filter(only_audio=True).order_by("abr").desc().first()
+        or yt.streams.filter(only_audio=True).first()
+    )
+    if not stream:
+        raise RuntimeError("pytubefix could not find an audio stream for this YouTube video.")
+
+    downloaded_path = stream.download(output_path=temp_dir, filename="media")
+    if not downloaded_path or not os.path.exists(downloaded_path):
+        raise RuntimeError("pytubefix did not produce a downloadable media file.")
+
+    return downloaded_path, temp_dir
+
+
+def _download_media(source_url: str) -> tuple[str, str]:
+    normalized_url = _normalize_source_url(source_url)
+    is_youtube = "youtube.com" in normalized_url or "youtu.be" in normalized_url
+
+    if not is_youtube:
+        return _download_media_with_ytdlp(source_url)
+
+    youtube_downloader = os.getenv("YOUTUBE_DOWNLOADER", "pytubefix").strip().lower()
+    last_exc: Exception | None = None
+
+    if youtube_downloader in {"pytubefix", "auto"}:
+        try:
+            return _download_youtube_audio_with_pytubefix(source_url)
+        except Exception as exc:
+            last_exc = exc
+            if youtube_downloader == "pytubefix":
+                raise RuntimeError(f"YouTube download via pytubefix failed: {exc}") from exc
+
+    if youtube_downloader in {"yt-dlp", "auto"}:
+        try:
+            return _download_media_with_ytdlp(source_url)
+        except Exception as exc:
+            last_exc = exc
+
+    if last_exc:
+        raise RuntimeError(f"YouTube media download failed: {last_exc}") from last_exc
+    raise RuntimeError(f"Unsupported YOUTUBE_DOWNLOADER value: {youtube_downloader}")
+
+
+def _looks_like_media_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    path = parsed.path.lower()
+    media_exts = (".mp4", ".m4a", ".mp3", ".webm", ".mkv", ".aac", ".wav", ".ogg", ".mov")
+    return path.endswith(media_exts) or any(ext in path for ext in media_exts)
+
+
+def _extract_url_candidates_from_payload(value: object) -> list[str]:
+    urls: list[str] = []
+    if isinstance(value, str):
+        parsed = urlparse(value)
+        if parsed.scheme in {"http", "https"}:
+            urls.append(value)
+        return urls
+
+    if isinstance(value, list):
+        for item in value:
+            urls.extend(_extract_url_candidates_from_payload(item))
+        return urls
+
+    if isinstance(value, dict):
+        for item in value.values():
+            urls.extend(_extract_url_candidates_from_payload(item))
+        return urls
+
+    return urls
+
+
+def _pick_media_url_from_apify_item(item: dict) -> str:
+    priority_keys = [
+        "videoUrl",
+        "video_url",
+        "videoHdUrl",
+        "video_hd_url",
+        "videoPlayUrl",
+        "video_play_url",
+        "downloadUrl",
+        "download_url",
+        "downloadedVideo",
+        "downloaded_video",
+        "audioUrl",
+        "audio_url",
+        "fileUrl",
+        "file_url",
+    ]
+    for key in priority_keys:
+        candidate = item.get(key)
+        if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
+            return candidate
+
+    all_urls = _extract_url_candidates_from_payload(item)
+    media_like = [url for url in all_urls if _looks_like_media_url(url)]
+    if media_like:
+        return media_like[0]
+    if all_urls:
+        return all_urls[0]
+
+    raise RuntimeError("Apify response did not contain a downloadable media URL.")
+
+
+def _build_apify_instagram_input(instagram_url: str) -> dict:
+    mode = os.getenv("APIFY_INSTAGRAM_INPUT_MODE", "urls").strip().lower()
+    input_payload: dict
+    if mode == "urls":
+        input_payload = {"urls": [{"url": instagram_url}]}
+    elif mode == "starturls":
+        input_payload = {"startUrls": [{"url": instagram_url}]}
+    elif mode == "directurls":
+        input_payload = {"directUrls": [instagram_url]}
+    else:
+        raise RuntimeError(
+            f"Unsupported APIFY_INSTAGRAM_INPUT_MODE='{mode}'. Use one of: urls, startUrls, directUrls."
+        )
+
+    extra_input_raw = os.getenv("APIFY_INSTAGRAM_EXTRA_INPUT_JSON", "").strip()
+    if extra_input_raw:
+        try:
+            extra_input = json.loads(extra_input_raw)
+        except ValueError as exc:
+            raise RuntimeError("APIFY_INSTAGRAM_EXTRA_INPUT_JSON must be valid JSON.") from exc
+        if not isinstance(extra_input, dict):
+            raise RuntimeError("APIFY_INSTAGRAM_EXTRA_INPUT_JSON must be a JSON object.")
+        input_payload.update(extra_input)
+
+    return input_payload
+
+
+def _fetch_instagram_media_url_with_apify(instagram_url: str) -> str:
+    token = os.getenv("APIFY_TOKEN", "").strip()
+    actor_id = os.getenv("APIFY_INSTAGRAM_ACTOR_ID", "").strip()
+    timeout_seconds = int(os.getenv("APIFY_INSTAGRAM_TIMEOUT_SECONDS", "300"))
+
+    if not token:
+        raise RuntimeError("Missing APIFY_TOKEN for Instagram extractor provider 'apify'.")
+    if not actor_id:
+        raise RuntimeError("Missing APIFY_INSTAGRAM_ACTOR_ID for Instagram extractor provider 'apify'.")
+
+    endpoint = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
+    params = {
+        "token": token,
+        "format": "json",
+        "clean": "1",
+    }
+    run_input = _build_apify_instagram_input(instagram_url)
+
+    response = requests.post(endpoint, params=params, json=run_input, timeout=timeout_seconds)
+    if not response.ok:
+        details = response.text[:500]
+        raise RuntimeError(f"Apify Instagram extractor failed ({response.status_code}): {details}")
+
+    payload = response.json()
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list) or not payload:
+        raise RuntimeError(f"Apify returned no dataset items for URL: {instagram_url}")
+
+    first = payload[0]
+    if not isinstance(first, dict):
+        raise RuntimeError("Unexpected Apify response item format.")
+
+    return _pick_media_url_from_apify_item(first)
+
+
+def _download_media_from_url(media_url: str, prefix: str = "playbook_media_ig_") -> tuple[str, str]:
+    temp_dir = tempfile.mkdtemp(prefix=prefix)
+    parsed = urlparse(media_url)
+    suffix = Path(parsed.path).suffix or ".mp4"
+    output_path = Path(temp_dir) / f"media{suffix}"
+
+    with requests.get(media_url, stream=True, timeout=120) as response:
+        response.raise_for_status()
+        with open(output_path, "wb") as file_handle:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    file_handle.write(chunk)
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise RuntimeError("Downloaded media file is empty.")
+
+    return str(output_path), temp_dir
+
+
+def _download_instagram_media_with_apify(instagram_url: str) -> tuple[str, str]:
+    media_url = _fetch_instagram_media_url_with_apify(_normalize_source_url(instagram_url))
+    return _download_media_from_url(media_url, prefix="playbook_media_ig_apify_")
+
+
 class _GroqUploadTooLarge(RuntimeError):
     pass
 
@@ -367,7 +571,7 @@ def extract_media_transcript(source_url: str) -> str:
     media_path = ""
     temp_dir = ""
     try:
-        media_path, temp_dir = _download_media_with_ytdlp(source_url)
+        media_path, temp_dir = _download_media(source_url)
 
         if use_groq_whisper:
             return _transcribe_with_groq(media_path)
@@ -378,4 +582,37 @@ def extract_media_transcript(source_url: str) -> str:
 
 
 def extract_instagram_transcript(instagram_url: str) -> str:
-    return extract_media_transcript(instagram_url)
+    provider = os.getenv("INSTAGRAM_EXTRACTOR_PROVIDER", "apify").strip().lower()
+    use_groq_whisper = os.getenv("USE_GROQ_WHISPER", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    allow_ytdlp_fallback = os.getenv("INSTAGRAM_APIFY_FALLBACK_TO_YTDLP", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    if provider == "yt-dlp":
+        return extract_media_transcript(instagram_url)
+
+    if provider == "apify":
+        media_path = ""
+        temp_dir = ""
+        try:
+            media_path, temp_dir = _download_instagram_media_with_apify(instagram_url)
+            if use_groq_whisper:
+                return _transcribe_with_groq(media_path)
+            return _transcribe_with_local_whisper(media_path)
+        except Exception:
+            if allow_ytdlp_fallback:
+                return extract_media_transcript(instagram_url)
+            raise
+        finally:
+            if temp_dir and os.path.isdir(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    raise RuntimeError(
+        f"Unsupported INSTAGRAM_EXTRACTOR_PROVIDER='{provider}'. Use 'yt-dlp' or 'apify'."
+    )
