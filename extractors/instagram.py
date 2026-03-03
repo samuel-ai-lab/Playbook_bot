@@ -321,8 +321,17 @@ def _pick_media_url_from_apify_item(item: dict) -> str:
     raise RuntimeError("Apify response did not contain a downloadable media URL.")
 
 
-def _build_apify_instagram_input(instagram_url: str) -> dict:
-    mode = os.getenv("APIFY_INSTAGRAM_INPUT_MODE", "starturls").strip().lower()
+def _build_apify_instagram_input(instagram_url: str, actor_id: str) -> dict:
+    mode = os.getenv("APIFY_INSTAGRAM_INPUT_MODE", "auto").strip().lower()
+    normalized_actor = actor_id.replace("/", "~").strip().lower()
+
+    if mode == "auto":
+        # apify/instagram-reel-scraper requires a "username" field and accepts reel URLs in it.
+        if normalized_actor == "apify~instagram-reel-scraper":
+            mode = "username"
+        else:
+            mode = "starturls"
+
     input_payload: dict
     if mode == "urls":
         input_payload = {"urls": [{"url": instagram_url}]}
@@ -330,9 +339,12 @@ def _build_apify_instagram_input(instagram_url: str) -> dict:
         input_payload = {"startUrls": [{"url": instagram_url}]}
     elif mode == "directurls":
         input_payload = {"directUrls": [instagram_url]}
+    elif mode == "username":
+        input_payload = {"username": [instagram_url]}
     else:
         raise RuntimeError(
-            f"Unsupported APIFY_INSTAGRAM_INPUT_MODE='{mode}'. Use one of: urls, startUrls, directUrls."
+            "Unsupported APIFY_INSTAGRAM_INPUT_MODE="
+            f"'{mode}'. Use one of: auto, username, urls, startUrls, directUrls."
         )
 
     extra_input_raw = os.getenv("APIFY_INSTAGRAM_EXTRA_INPUT_JSON", "").strip()
@@ -348,7 +360,7 @@ def _build_apify_instagram_input(instagram_url: str) -> dict:
     return input_payload
 
 
-def _fetch_instagram_media_url_with_apify(instagram_url: str) -> str:
+def _run_instagram_apify_actor(instagram_url: str) -> dict:
     token = os.getenv("APIFY_TOKEN", "").strip()
     actor_id = os.getenv("APIFY_INSTAGRAM_ACTOR_ID", "apify~instagram-reel-scraper").strip()
     timeout_seconds = int(os.getenv("APIFY_INSTAGRAM_TIMEOUT_SECONDS", "300"))
@@ -364,16 +376,21 @@ def _fetch_instagram_media_url_with_apify(instagram_url: str) -> str:
         "format": "json",
         "clean": "1",
     }
-    run_input = _build_apify_instagram_input(instagram_url)
+    run_input = _build_apify_instagram_input(instagram_url, actor_id=actor_id)
 
     response = requests.post(endpoint, params=params, json=run_input, timeout=timeout_seconds)
     if not response.ok:
         details = response.text[:500]
         if response.status_code == 400 and "input.username" in details:
             raise RuntimeError(
-                "Selected Apify actor expects a profile username, not reel URLs. "
+                "Selected Apify actor expects input.username. "
                 "Use APIFY_INSTAGRAM_ACTOR_ID=apify~instagram-reel-scraper and "
-                "APIFY_INSTAGRAM_INPUT_MODE=starturls."
+                "APIFY_INSTAGRAM_INPUT_MODE=username (or auto)."
+            )
+        if response.status_code == 400 and "input.startUrls" in details:
+            raise RuntimeError(
+                "Selected Apify actor expects input.startUrls. "
+                "Set APIFY_INSTAGRAM_INPUT_MODE=starturls."
             )
         raise RuntimeError(f"Apify Instagram extractor failed ({response.status_code}): {details}")
 
@@ -386,8 +403,28 @@ def _fetch_instagram_media_url_with_apify(instagram_url: str) -> str:
     first = payload[0]
     if not isinstance(first, dict):
         raise RuntimeError("Unexpected Apify response item format.")
+    return first
 
-    return _pick_media_url_from_apify_item(first)
+
+def _extract_transcript_from_apify_item(item: dict) -> str:
+    transcript = item.get("transcript")
+    if isinstance(transcript, str) and transcript.strip():
+        return transcript.strip()
+
+    if isinstance(transcript, list):
+        lines: list[str] = []
+        for part in transcript:
+            if isinstance(part, str) and part.strip():
+                lines.append(part.strip())
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    lines.append(text.strip())
+        merged = "\n".join(lines).strip()
+        if merged:
+            return merged
+
+    return ""
 
 
 def _download_media_from_url(media_url: str, prefix: str = "playbook_media_ig_") -> tuple[str, str]:
@@ -409,8 +446,9 @@ def _download_media_from_url(media_url: str, prefix: str = "playbook_media_ig_")
     return str(output_path), temp_dir
 
 
-def _download_instagram_media_with_apify(instagram_url: str) -> tuple[str, str]:
-    media_url = _fetch_instagram_media_url_with_apify(_normalize_source_url(instagram_url))
+def _download_instagram_media_with_apify(instagram_url: str, actor_item: dict | None = None) -> tuple[str, str]:
+    item = actor_item if isinstance(actor_item, dict) else _run_instagram_apify_actor(_normalize_source_url(instagram_url))
+    media_url = _pick_media_url_from_apify_item(item)
     return _download_media_from_url(media_url, prefix="playbook_media_ig_apify_")
 
 
@@ -607,7 +645,12 @@ def extract_instagram_transcript(instagram_url: str) -> str:
         media_path = ""
         temp_dir = ""
         try:
-            media_path, temp_dir = _download_instagram_media_with_apify(instagram_url)
+            actor_item = _run_instagram_apify_actor(instagram_url)
+            actor_transcript = _extract_transcript_from_apify_item(actor_item)
+            if actor_transcript:
+                return actor_transcript
+
+            media_path, temp_dir = _download_instagram_media_with_apify(instagram_url, actor_item=actor_item)
             if use_groq_whisper:
                 return _transcribe_with_groq(media_path)
             return _transcribe_with_local_whisper(media_path)
