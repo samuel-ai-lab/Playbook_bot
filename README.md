@@ -45,8 +45,8 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `GROQ_AUDIO_CHUNK_SECONDS` (default: `900`)
 - `INSTAGRAM_EXTRACTOR_PROVIDER` (default: `apify`; options: `apify`, `yt-dlp`)
 - `APIFY_TOKEN` (required when `INSTAGRAM_EXTRACTOR_PROVIDER=apify`)
-- `APIFY_INSTAGRAM_ACTOR_ID` (required when `INSTAGRAM_EXTRACTOR_PROVIDER=apify`)
-- `APIFY_INSTAGRAM_INPUT_MODE` (default: `urls`; options: `urls`, `startUrls`, `directUrls`)
+- `APIFY_INSTAGRAM_ACTOR_ID` (default: `apify~instagram-reel-scraper`)
+- `APIFY_INSTAGRAM_INPUT_MODE` (default: `starturls`; options: `urls`, `startUrls`, `directUrls`)
 - `APIFY_INSTAGRAM_EXTRA_INPUT_JSON` (optional JSON object merged into the actor input)
 - `APIFY_INSTAGRAM_TIMEOUT_SECONDS` (default: `300`)
 - `INSTAGRAM_APIFY_FALLBACK_TO_YTDLP` (default: `false`)
@@ -61,7 +61,8 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 
 - Cobalt is not used.
 - Instagram defaults to API-based extraction (`INSTAGRAM_EXTRACTOR_PROVIDER=apify`) to avoid cookie/login issues.
-- If you choose the `apify` provider, set `APIFY_TOKEN` and `APIFY_INSTAGRAM_ACTOR_ID`.
+- Recommended IG actor for reel URLs: `apify~instagram-reel-scraper`.
+- If an actor returns `Field input.username is required`, that actor expects profile usernames, not reel URLs.
 - YouTube extraction order is:
   1) TranscriptAPI (if `TRANSCRIPT_API_KEY` is set)
   2) `youtube-transcript-api`

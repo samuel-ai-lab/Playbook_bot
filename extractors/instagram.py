@@ -322,7 +322,7 @@ def _pick_media_url_from_apify_item(item: dict) -> str:
 
 
 def _build_apify_instagram_input(instagram_url: str) -> dict:
-    mode = os.getenv("APIFY_INSTAGRAM_INPUT_MODE", "urls").strip().lower()
+    mode = os.getenv("APIFY_INSTAGRAM_INPUT_MODE", "starturls").strip().lower()
     input_payload: dict
     if mode == "urls":
         input_payload = {"urls": [{"url": instagram_url}]}
@@ -350,7 +350,7 @@ def _build_apify_instagram_input(instagram_url: str) -> dict:
 
 def _fetch_instagram_media_url_with_apify(instagram_url: str) -> str:
     token = os.getenv("APIFY_TOKEN", "").strip()
-    actor_id = os.getenv("APIFY_INSTAGRAM_ACTOR_ID", "").strip()
+    actor_id = os.getenv("APIFY_INSTAGRAM_ACTOR_ID", "apify~instagram-reel-scraper").strip()
     timeout_seconds = int(os.getenv("APIFY_INSTAGRAM_TIMEOUT_SECONDS", "300"))
 
     if not token:
@@ -369,6 +369,12 @@ def _fetch_instagram_media_url_with_apify(instagram_url: str) -> str:
     response = requests.post(endpoint, params=params, json=run_input, timeout=timeout_seconds)
     if not response.ok:
         details = response.text[:500]
+        if response.status_code == 400 and "input.username" in details:
+            raise RuntimeError(
+                "Selected Apify actor expects a profile username, not reel URLs. "
+                "Use APIFY_INSTAGRAM_ACTOR_ID=apify~instagram-reel-scraper and "
+                "APIFY_INSTAGRAM_INPUT_MODE=starturls."
+            )
         raise RuntimeError(f"Apify Instagram extractor failed ({response.status_code}): {details}")
 
     payload = response.json()
