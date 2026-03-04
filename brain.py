@@ -477,10 +477,10 @@ def generate_playbook(transcript_text: str, source_url: str = "", duration_secon
     api_key = os.getenv("GROQ_API_KEY")
     groq_base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
     groq_llm_model = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
-    chunk_chars = int(os.getenv("BRAIN_TRANSCRIPT_CHUNK_CHARS", "40000"))
+    chunk_chars = int(os.getenv("BRAIN_TRANSCRIPT_CHUNK_CHARS", "18000"))
     max_chunks = int(os.getenv("BRAIN_MAX_CHUNKS", "200"))
-    merge_batch_size = int(os.getenv("BRAIN_MERGE_BATCH_SIZE", "8"))
-    min_chunk_chars = int(os.getenv("BRAIN_MIN_CHUNK_CHARS", "8000"))
+    merge_batch_size = int(os.getenv("BRAIN_MERGE_BATCH_SIZE", "4"))
+    min_chunk_chars = int(os.getenv("BRAIN_MIN_CHUNK_CHARS", "4000"))
     long_video_seconds = int(os.getenv("BRAIN_LONG_VIDEO_SECONDS", "3600"))
 
     if not api_key:
