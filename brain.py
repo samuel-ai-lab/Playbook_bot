@@ -7,80 +7,84 @@ from typing import Any
 
 import requests
 
-SYSTEM_PROMPT = """
-You are a Senior Business Consultant.
-Read the transcript and extract high-leverage tactics.
-Return ONLY a JSON object with this exact schema:
+LONGFORM_SCHEMA = """
 {
   "title": string,
-  "summary": string,
-  "action_steps": string[],
-  "insights": string[],
+  "introduction": string,
+  "sections": [
+    {
+      "heading": string,
+      "content": string,
+      "notes_pack": string[]
+    }
+  ],
+  "conclusion": string,
+  "implementation_checklist": string[],
   "tags": string[]
 }
-Rules:
-- title must be action-oriented.
-- summary must be concise and practical.
-- action_steps must be imperative and specific.
-- insights should contain strategic observations.
-- tags should be short categorical labels.
-- Do not include markdown, prose, or extra keys.
 """.strip()
 
-CHUNK_SYSTEM_PROMPT = """
-You are a Senior Business Consultant analyzing one chunk of a longer transcript.
-Extract the highest-leverage tactics from this chunk only.
-Return ONLY a JSON object with this exact schema:
-{
-  "title": string,
-  "summary": string,
-  "action_steps": string[],
-  "insights": string[],
-  "tags": string[]
-}
-Rules:
-- Keep output concise and specific.
-- action_steps must be imperative.
-- tags must be short labels.
-- Do not include markdown, prose, or extra keys.
+SYSTEM_PROMPT = f"""
+Situation:
+You are an expert content strategist and educational writer specializing in transforming conversational podcast content
+into polished, actionable written resources.
+
+Task:
+Transform the transcript into a clean, structured playbook formatted as an insight digest / educational blog post.
+
+Objective:
+Create a condensed 4-5 page longform teaching resource in an operator/playbook style that is personal, friendly,
+and publication-ready.
+
+Output constraints:
+- Return ONLY a JSON object with this exact schema:
+{LONGFORM_SCHEMA}
+- Remove podcast artifacts (speaker labels, timestamps, fillers, back-and-forth chatter).
+- Preserve key ideas, frameworks, examples, and storytelling.
+- Use descriptive section headings and smooth transitions.
+- End every major section with a short notes-pack bullet list in `notes_pack`.
+- Keep text practical, actionable, and structured for immediate execution.
+- Do not include markdown fences or extra keys.
 """.strip()
 
-MERGE_SYSTEM_PROMPT = """
-You are a Senior Business Consultant combining multiple chunk analyses into one final playbook.
+CHUNK_SYSTEM_PROMPT = f"""
+You are transforming one chunk of a larger transcript into longform educational playbook material.
 Return ONLY a JSON object with this exact schema:
-{
-  "title": string,
-  "summary": string,
-  "action_steps": string[],
-  "insights": string[],
-  "tags": string[]
-}
-Rules:
-- Synthesize across all chunk analyses without losing important tactics.
-- Remove duplicates and merge overlapping steps.
-- Keep action_steps specific and executable.
-- Keep tags compact and de-duplicated.
-- Do not include markdown, prose, or extra keys.
+{LONGFORM_SCHEMA}
+
+Chunk rules:
+- Focus only on this chunk's ideas while writing in polished written form.
+- Preserve frameworks/examples from the chunk.
+- Use 2-4 section objects when possible.
+- Include notes-pack bullets in each section.
+- Do not include markdown fences or extra keys.
 """.strip()
 
-LONG_VIDEO_MERGE_SYSTEM_PROMPT = """
-You are a Senior Business Consultant combining analyses from a long-form transcript (over 1 hour).
+MERGE_SYSTEM_PROMPT = f"""
+You are combining multiple chunk-level longform drafts into one coherent final playbook.
 Return ONLY a JSON object with this exact schema:
-{
-  "title": string,
-  "summary": string,
-  "action_steps": string[],
-  "insights": string[],
-  "tags": string[]
-}
-Rules:
-- Preserve full context coverage: beginning, middle, and end of the source.
-- Prioritize durable themes and high-leverage tactics over minute-level details.
-- In summary, provide a coherent narrative arc plus key outcomes.
-- action_steps should be concise, executable, and de-duplicated.
-- insights should capture strategic patterns that appeared repeatedly.
-- Keep tags compact and de-duplicated.
-- Do not include markdown, prose, or extra keys.
+{LONGFORM_SCHEMA}
+
+Merge rules:
+- Produce a single coherent narrative that reads like it was written as an article.
+- Remove repetition and merge overlapping ideas.
+- Preserve all high-value frameworks and examples.
+- Keep transitions natural across sections.
+- Keep notes-pack bullets concise and actionable.
+- Do not include markdown fences or extra keys.
+""".strip()
+
+LONG_VIDEO_MERGE_SYSTEM_PROMPT = f"""
+You are combining chunk drafts from a long transcript (over 1 hour) into one final longform playbook.
+Return ONLY a JSON object with this exact schema:
+{LONGFORM_SCHEMA}
+
+Long-video merge rules:
+- Preserve context coverage from beginning, middle, and end.
+- Prioritize durable themes while retaining critical examples.
+- Keep narrative flow strong and section sequencing intentional.
+- Ensure each section ends with a practical notes-pack bullet list.
+- Do not include markdown fences or extra keys.
 """.strip()
 
 
@@ -101,23 +105,75 @@ def _ensure_string_list(value: Any) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
+def _ensure_sections(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    sections: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+
+        heading = _ensure_string(item.get("heading"))
+        content = _ensure_string(item.get("content"))
+        notes_pack = _ensure_string_list(item.get("notes_pack"))
+
+        if not heading and content:
+            heading = "Key Idea"
+        if not heading and not content and not notes_pack:
+            continue
+
+        sections.append(
+            {
+                "heading": heading[:180] if heading else "Key Idea",
+                "content": content,
+                "notes_pack": notes_pack,
+            }
+        )
+
+    return sections
+
+
 def _normalize_payload(payload: dict) -> dict:
     normalized = {
-        "title": _ensure_string(payload.get("title"), "Build an actionable playbook"),
-        "summary": _ensure_string(payload.get("summary")),
-        "action_steps": _ensure_string_list(payload.get("action_steps")),
-        "insights": _ensure_string_list(payload.get("insights")),
+        "title": _ensure_string(payload.get("title"), "Playbook"),
+        "introduction": _ensure_string(payload.get("introduction")),
+        "sections": _ensure_sections(payload.get("sections")),
+        "conclusion": _ensure_string(payload.get("conclusion")),
+        "implementation_checklist": _ensure_string_list(payload.get("implementation_checklist")),
         "tags": _ensure_string_list(payload.get("tags")),
     }
 
-    if not normalized["action_steps"]:
-        normalized["action_steps"] = ["Review the source and extract 3 specific actions to execute this week."]
+    if not normalized["introduction"]:
+        normalized["introduction"] = (
+            "This playbook distills the transcript into a structured guide you can apply immediately."
+        )
 
-    if not normalized["summary"]:
-        normalized["summary"] = "No summary was generated from the transcript."
+    if not normalized["sections"]:
+        normalized["sections"] = [
+            {
+                "heading": "Core Insights",
+                "content": _ensure_string(payload.get("summary")) or _ensure_string(payload.get("introduction")),
+                "notes_pack": _ensure_string_list(payload.get("action_steps"))[:6],
+            }
+        ]
 
-    normalized["action_steps"] = normalized["action_steps"][:40]
-    normalized["insights"] = normalized["insights"][:40]
+    if not normalized["conclusion"]:
+        normalized["conclusion"] = "Use this playbook as an operating reference and implement one section at a time."
+
+    if not normalized["implementation_checklist"]:
+        normalized["implementation_checklist"] = [
+            "Choose one section from this playbook to apply this week.",
+            "Turn the notes-pack bullets into scheduled tasks.",
+            "Review outcomes and refine your operating playbook."
+        ]
+
+    normalized["sections"] = normalized["sections"][:16]
+    for section in normalized["sections"]:
+        section["content"] = _ensure_string(section.get("content"))[:12000]
+        section["notes_pack"] = _ensure_string_list(section.get("notes_pack"))[:10]
+
+    normalized["implementation_checklist"] = normalized["implementation_checklist"][:20]
     normalized["tags"] = normalized["tags"][:20]
 
     return normalized
@@ -230,11 +286,25 @@ def _chat_json(
 
 
 def _compact_analysis(item: dict) -> dict:
+    sections = _ensure_sections(item.get("sections"))[:8]
+    compact_sections: list[dict[str, Any]] = []
+    for section in sections:
+        compact_sections.append(
+            {
+                "heading": _ensure_string(section.get("heading"))[:140],
+                "content": _ensure_string(section.get("content"))[:700],
+                "notes_pack": [_ensure_string(note)[:180] for note in _ensure_string_list(section.get("notes_pack"))[:6]],
+            }
+        )
+
     return {
         "title": _ensure_string(item.get("title"), "")[:140],
-        "summary": _ensure_string(item.get("summary"), "")[:500],
-        "action_steps": [_ensure_string(step)[:220] for step in _ensure_string_list(item.get("action_steps"))[:10]],
-        "insights": [_ensure_string(step)[:220] for step in _ensure_string_list(item.get("insights"))[:10]],
+        "introduction": _ensure_string(item.get("introduction"), "")[:700],
+        "sections": compact_sections,
+        "conclusion": _ensure_string(item.get("conclusion"), "")[:600],
+        "implementation_checklist": [
+            _ensure_string(step)[:180] for step in _ensure_string_list(item.get("implementation_checklist"))[:8]
+        ],
         "tags": [_ensure_string(tag)[:40] for tag in _ensure_string_list(item.get("tags"))[:10]],
     }
 
@@ -497,7 +567,10 @@ def generate_playbook(transcript_text: str, source_url: str = "", duration_secon
     long_video_mode = effective_duration > long_video_seconds
 
     if len(transcript_text) <= chunk_chars:
-        return _single_pass_playbook(endpoint, headers, groq_llm_model, transcript_text, source_url)
+        try:
+            return _single_pass_playbook(endpoint, headers, groq_llm_model, transcript_text, source_url)
+        except _PayloadTooLargeError:
+            pass
     return _chunked_playbook(
         endpoint=endpoint,
         headers=headers,

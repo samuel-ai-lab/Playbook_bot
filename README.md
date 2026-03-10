@@ -1,6 +1,6 @@
 # Playbook Factory
 
-Automates extraction of transcripts from YouTube/Instagram and publishes structured playbooks to Notion.
+Automates extraction of transcripts from YouTube/Instagram and publishes longform playbooks to Notion.
 
 ## Configuration (.env)
 
@@ -30,7 +30,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `TRANSCRIPT_API_TIMEOUT_SECONDS` (default: `45`)
 - `TRANSCRIPT_API_MAX_RETRIES` (default: `3`)
 - `TRANSCRIPT_API_RETRY_BASE_SEC` (default: `1.5`)
-- `BRAIN_TRANSCRIPT_CHUNK_CHARS` (default: `18000`; LLM chunk size for full transcript processing)
+- `BRAIN_TRANSCRIPT_CHUNK_CHARS` (default: `18000`; LLM chunk size for longform synthesis)
 - `BRAIN_MAX_CHUNKS` (default: `200`; safety cap for extreme transcript lengths)
 - `BRAIN_MERGE_BATCH_SIZE` (default: `4`; chunk-analysis merge batch size to avoid payload limits)
 - `BRAIN_MIN_CHUNK_CHARS` (default: `4000`; smallest auto-split chunk size before failing)
@@ -72,7 +72,19 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - By default, YouTube `yt-dlp` fallbacks are disabled.
 - If YouTube fallback returns `403 Forbidden`, set `YTDLP_COOKIES_FROM_BROWSER` (or `YTDLP_COOKIES_FILE`) and retry.
 - If Groq returns `413 Request Entity Too Large`, the pipeline auto-compresses/chunks audio (requires `ffmpeg`).
-- Transcript intelligence is fully end-to-end: long transcripts are processed in chunks and merged into one final playbook.
+- Transcript intelligence is fully end-to-end: long transcripts are processed in chunks and merged into one final longform playbook.
+
+## Output format
+
+- Single mode only: longform playbook/article output (no short summary mode).
+- Output is generated as structured JSON with:
+  - `title`
+  - `introduction`
+  - `sections[]` (`heading`, `content`, `notes_pack[]`)
+  - `conclusion`
+  - `implementation_checklist[]`
+  - `tags[]`
+- Notion rendering writes sectioned narrative content with per-section notes-pack bullets.
 
 ## Local run
 

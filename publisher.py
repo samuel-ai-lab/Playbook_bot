@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Any
 
 from notion_client import Client
@@ -24,6 +25,37 @@ def _paragraph_block(text: str) -> dict[str, Any]:
             ]
         },
     }
+
+
+def _split_paragraph_chunks(text: str, max_len: int = 1700) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+
+    parts = [part.strip() for part in re.split(r"\n{2,}", cleaned) if part.strip()]
+    if not parts:
+        parts = [cleaned]
+
+    chunks: list[str] = []
+    for part in parts:
+        remaining = part
+        while len(remaining) > max_len:
+            split_at = remaining.rfind(". ", 0, max_len)
+            if split_at < int(max_len * 0.5):
+                split_at = remaining.rfind(" ", 0, max_len)
+            if split_at <= 0:
+                split_at = max_len
+            chunk = remaining[:split_at].strip()
+            if chunk:
+                chunks.append(chunk)
+            remaining = remaining[split_at:].strip()
+        if remaining:
+            chunks.append(remaining)
+    return chunks
+
+
+def _paragraph_blocks(text: str) -> list[dict[str, Any]]:
+    return [_paragraph_block(chunk) for chunk in _split_paragraph_chunks(text)]
 
 
 def _bulleted_block(text: str) -> dict[str, Any]:
@@ -60,20 +92,64 @@ def _heading_block(text: str, level: int = 2) -> dict[str, Any]:
 def _build_blocks(playbook: dict, source_url: str = "") -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
 
-    blocks.append(_heading_block("Summary", level=2))
-    blocks.append(_paragraph_block(playbook.get("summary", "")))
+    introduction = str(playbook.get("introduction", "")).strip()
+    if not introduction:
+        introduction = str(playbook.get("summary", "")).strip()
 
-    blocks.append(_heading_block("Action Steps", level=2))
-    for step in playbook.get("action_steps", []):
-        blocks.append(_bulleted_block(step))
+    if introduction:
+        blocks.append(_heading_block("Overview", level=2))
+        blocks.extend(_paragraph_blocks(introduction))
 
-    insights = playbook.get("insights", [])
-    if insights:
-        blocks.append(_heading_block("Insights", level=2))
-        for insight in insights:
-            blocks.append(_bulleted_block(insight))
+    sections = playbook.get("sections", [])
+    if not isinstance(sections, list):
+        sections = []
 
-    tags = playbook.get("tags", [])
+    if not sections:
+        legacy_content = str(playbook.get("summary", "")).strip()
+        legacy_notes = playbook.get("action_steps", [])
+        if legacy_content or legacy_notes:
+            sections = [
+                {
+                    "heading": "Core Playbook",
+                    "content": legacy_content,
+                    "notes_pack": legacy_notes if isinstance(legacy_notes, list) else [],
+                }
+            ]
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        heading = str(section.get("heading", "")).strip() or "Key Section"
+        content = str(section.get("content", "")).strip()
+        notes_pack = section.get("notes_pack", [])
+
+        blocks.append(_heading_block(heading, level=2))
+        if content:
+            blocks.extend(_paragraph_blocks(content))
+
+        if isinstance(notes_pack, list):
+            notes = [str(note).strip() for note in notes_pack if str(note).strip()]
+            if notes:
+                blocks.append(_heading_block("Notes Pack", level=3))
+                for note in notes:
+                    blocks.append(_bulleted_block(note))
+
+    checklist = playbook.get("implementation_checklist", [])
+    if isinstance(checklist, list):
+        checklist_items = [str(item).strip() for item in checklist if str(item).strip()]
+        if checklist_items:
+            blocks.append(_heading_block("Implementation Checklist", level=2))
+            for item in checklist_items:
+                blocks.append(_bulleted_block(item))
+
+    conclusion = str(playbook.get("conclusion", "")).strip()
+    if conclusion:
+        blocks.append(_heading_block("Conclusion", level=2))
+        blocks.extend(_paragraph_blocks(conclusion))
+
+    tags_raw = playbook.get("tags", [])
+    tags = [str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else []
+    tags = [tag for tag in tags if tag]
     if tags:
         blocks.append(_heading_block("Tags", level=3))
         blocks.append(_paragraph_block(", ".join(tags)))
@@ -126,7 +202,9 @@ def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) ->
     }
 
     tags_prop = _find_multi_select_name(db_schema)
-    tags = playbook.get("tags", [])
+    tags_raw = playbook.get("tags", [])
+    tags = [str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else []
+    tags = [tag for tag in tags if tag]
     if tags_prop and tags:
         properties[tags_prop] = {"multi_select": [{"name": _truncate_text(tag, 100)} for tag in tags]}
 
