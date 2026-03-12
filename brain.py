@@ -33,7 +33,7 @@ Task:
 Transform the transcript into a clean, structured playbook formatted as an insight digest / educational blog post.
 
 Objective:
-Create a condensed 4-5 page longform teaching resource in an operator/playbook style that is personal, friendly,
+Create a longform teaching resource in an operator/playbook style that is personal, friendly,
 and publication-ready.
 
 Output constraints:
