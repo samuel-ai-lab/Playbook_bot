@@ -8,7 +8,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 
 ### Required variables
 
-- `GROQ_API_KEY`
+- `OPENAI_API_KEY`
 - `NOTION_TOKEN`
 - `NOTION_DB_ID` (database where each generated playbook is created as a page item)
 - `G_SHEETS_JSON` (stringified Google service account JSON)
@@ -23,22 +23,22 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `SHEET_NOTION_URL_COL` (default: `Notion URL`)
 - `SHEET_TITLE_COL` (default: `Notion Title`)
 - `SHEET_ERROR_COL` (default: `Error`)
+- `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
+- `OPENAI_MODEL` (default: `gpt-5`)
+- `OPENAI_MAX_OUTPUT_TOKENS` (default: `32000`)
+- `OPENAI_TEXT_VERBOSITY` (default: `high`; options: `low`, `medium`, `high`)
+- `OPENAI_REASONING_EFFORT` (optional; `minimal`, `low`, `medium`, `high`)
+- `BRAIN_LLM_MAX_RETRIES` (default: `6`; retries on `429`/`5xx` or transient network errors)
+- `BRAIN_LLM_RETRY_BASE_SEC` (default: `1.5`; exponential backoff base)
+- `BRAIN_LLM_MAX_BACKOFF_SEC` (default: `45`; max wait between retries)
+- `BRAIN_LLM_MIN_INTERVAL_SEC` (default: `0.35`; pacing between LLM requests)
 - `GROQ_BASE_URL` (default: `https://api.groq.com/openai/v1`)
-- `GROQ_LLM_MODEL` (default: `openai/gpt-oss-120b`)
 - `TRANSCRIPT_API_KEY` (optional; if set, YouTube transcript fetch uses transcriptapi.com first)
 - `TRANSCRIPT_API_BASE_URL` (default: `https://transcriptapi.com`)
 - `TRANSCRIPT_API_TIMEOUT_SECONDS` (default: `45`)
 - `TRANSCRIPT_API_MAX_RETRIES` (default: `3`)
 - `TRANSCRIPT_API_RETRY_BASE_SEC` (default: `1.5`)
-- `BRAIN_TRANSCRIPT_CHUNK_CHARS` (default: `18000`; LLM chunk size for longform synthesis)
-- `BRAIN_MAX_CHUNKS` (default: `200`; safety cap for extreme transcript lengths)
-- `BRAIN_MERGE_BATCH_SIZE` (default: `4`; chunk-analysis merge batch size to avoid payload limits)
-- `BRAIN_MIN_CHUNK_CHARS` (default: `4000`; smallest auto-split chunk size before failing)
-- `BRAIN_LONG_VIDEO_SECONDS` (default: `3600`; activates long-video context-preserving synthesis above this duration)
-- `BRAIN_LLM_MAX_RETRIES` (default: `6`; retries on `429`/`5xx` or transient network errors)
-- `BRAIN_LLM_RETRY_BASE_SEC` (default: `1.5`; exponential backoff base)
-- `BRAIN_LLM_MAX_BACKOFF_SEC` (default: `45`; max wait between retries)
-- `BRAIN_LLM_MIN_INTERVAL_SEC` (default: `0.35`; pacing between LLM requests)
+- `GROQ_API_KEY` (optional; only needed when `USE_GROQ_WHISPER=true` and media transcription uses Groq Whisper)
 - `GROQ_WHISPER_MODEL` (default: `whisper-large-v3`)
 - `USE_GROQ_WHISPER` (default: `true`)
 - `GROQ_MAX_UPLOAD_BYTES` (default: `24000000`)
@@ -72,7 +72,8 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - By default, YouTube `yt-dlp` fallbacks are disabled.
 - If YouTube fallback returns `403 Forbidden`, set `YTDLP_COOKIES_FROM_BROWSER` (or `YTDLP_COOKIES_FILE`) and retry.
 - If Groq returns `413 Request Entity Too Large`, the pipeline auto-compresses/chunks audio (requires `ffmpeg`).
-- Transcript intelligence is fully end-to-end: long transcripts are processed in chunks and merged into one final longform playbook.
+- Playbook writing now runs as a single-pass OpenAI generation (no transcript chunk/merge compression).
+- If inline transcript input hits request-size limits, the writer automatically retries in file-input mode to preserve one-pass behavior.
 
 ## Output format
 

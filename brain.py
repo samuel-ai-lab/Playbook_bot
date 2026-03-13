@@ -2,7 +2,9 @@ import json
 import os
 import random
 import re
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -213,12 +215,39 @@ def _chat_json(
     temperature: float,
     timeout_seconds: int,
 ) -> dict:
-    payload = {
+    _ = temperature  # Model-side defaults are used to maximize natural longform behavior.
+
+    input_items: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role", "user"))
+        content = str(message.get("content", "")).strip()
+        if not content:
+            continue
+        input_items.append(
+            {
+                "type": "message",
+                "role": role,
+                "content": [{"type": "input_text", "text": content}],
+            }
+        )
+
+    payload: dict[str, Any] = {
         "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "response_format": {"type": "json_object"},
+        "input": input_items,
+        "text": {"format": {"type": "json_object"}},
     }
+
+    text_verbosity = os.getenv("OPENAI_TEXT_VERBOSITY", "high").strip().lower()
+    if text_verbosity in {"low", "medium", "high"}:
+        payload["text"]["verbosity"] = text_verbosity
+
+    max_output_tokens = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "32000"))
+    if max_output_tokens > 0:
+        payload["max_output_tokens"] = max_output_tokens
+
+    reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip().lower()
+    if reasoning_effort in {"minimal", "low", "medium", "high"}:
+        payload["reasoning"] = {"effort": reasoning_effort}
 
     max_retries = int(os.getenv("BRAIN_LLM_MAX_RETRIES", "6"))
     retry_base_sec = float(os.getenv("BRAIN_LLM_RETRY_BASE_SEC", "1.5"))
@@ -271,7 +300,30 @@ def _chat_json(
 
     body = response.json()
 
-    content = body.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    content = ""
+    maybe_output_text = body.get("output_text")
+    if isinstance(maybe_output_text, str):
+        content = maybe_output_text.strip()
+
+    if not content:
+        output_items = body.get("output", [])
+        if isinstance(output_items, list):
+            parts: list[str] = []
+            for item in output_items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != "message":
+                    continue
+                for content_item in item.get("content", []):
+                    if not isinstance(content_item, dict):
+                        continue
+                    if content_item.get("type") in {"output_text", "text"}:
+                        text = content_item.get("text")
+                        if isinstance(text, str) and text.strip():
+                            parts.append(text.strip())
+            if parts:
+                content = "\n".join(parts).strip()
+
     if not content:
         raise RuntimeError(f"LLM returned empty content: {body}")
 
@@ -283,6 +335,170 @@ def _chat_json(
     if not isinstance(parsed, dict):
         raise RuntimeError(f"Expected JSON object, got: {type(parsed)}")
     return parsed
+
+
+def _upload_transcript_file(api_base_url: str, headers: dict[str, str], transcript_text: str) -> str:
+    upload_url = f"{api_base_url.rstrip('/')}/files"
+    auth_headers = {"Authorization": headers.get("Authorization", "")}
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as temp_file:
+        temp_file.write(transcript_text)
+        temp_path = Path(temp_file.name)
+
+    try:
+        with open(temp_path, "rb") as file_handle:
+            response = requests.post(
+                upload_url,
+                headers=auth_headers,
+                data={"purpose": "user_data"},
+                files={"file": (temp_path.name, file_handle, "text/plain")},
+                timeout=120,
+            )
+        response.raise_for_status()
+        body = response.json()
+        file_id = body.get("id")
+        if not isinstance(file_id, str) or not file_id:
+            raise RuntimeError(f"OpenAI file upload did not return a file id: {body}")
+        return file_id
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _delete_transcript_file(api_base_url: str, headers: dict[str, str], file_id: str) -> None:
+    if not file_id:
+        return
+    delete_url = f"{api_base_url.rstrip('/')}/files/{file_id}"
+    auth_headers = {"Authorization": headers.get("Authorization", "")}
+    try:
+        requests.delete(delete_url, headers=auth_headers, timeout=30)
+    except Exception:
+        pass
+
+
+def _chat_json_with_file(
+    endpoint: str,
+    api_base_url: str,
+    headers: dict[str, str],
+    model: str,
+    source_url: str,
+    transcript_text: str,
+    timeout_seconds: int,
+) -> dict:
+    file_id = _upload_transcript_file(api_base_url, headers, transcript_text)
+    try:
+        input_items = [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"Source URL: {source_url}\n\n"
+                            "The transcript is attached as an input file. "
+                            "Use the full transcript and produce the JSON now."
+                        ),
+                    }
+                ],
+            },
+            {"type": "input_file", "file_id": file_id},
+        ]
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": input_items,
+            "text": {"format": {"type": "json_object"}},
+        }
+
+        text_verbosity = os.getenv("OPENAI_TEXT_VERBOSITY", "high").strip().lower()
+        if text_verbosity in {"low", "medium", "high"}:
+            payload["text"]["verbosity"] = text_verbosity
+
+        max_output_tokens = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "32000"))
+        if max_output_tokens > 0:
+            payload["max_output_tokens"] = max_output_tokens
+
+        reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip().lower()
+        if reasoning_effort in {"minimal", "low", "medium", "high"}:
+            payload["reasoning"] = {"effort": reasoning_effort}
+
+        max_retries = int(os.getenv("BRAIN_LLM_MAX_RETRIES", "6"))
+        retry_base_sec = float(os.getenv("BRAIN_LLM_RETRY_BASE_SEC", "1.5"))
+        max_backoff_sec = float(os.getenv("BRAIN_LLM_MAX_BACKOFF_SEC", "45"))
+
+        response = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
+            except requests.RequestException as exc:
+                if attempt >= max_retries:
+                    raise RuntimeError(f"LLM file-mode request failed after retries: {exc}") from exc
+                sleep_for = min(max_backoff_sec, retry_base_sec * (2**attempt)) + random.uniform(0, 0.5)
+                time.sleep(sleep_for)
+                continue
+
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt >= max_retries:
+                    response.raise_for_status()
+                retry_after_hdr = response.headers.get("Retry-After", "").strip()
+                retry_after_sec = 0.0
+                if retry_after_hdr:
+                    try:
+                        retry_after_sec = float(retry_after_hdr)
+                    except ValueError:
+                        retry_after_sec = 0.0
+                backoff_sec = min(max_backoff_sec, retry_base_sec * (2**attempt))
+                sleep_for = max(retry_after_sec, backoff_sec) + random.uniform(0, 0.5)
+                time.sleep(sleep_for)
+                continue
+
+            response.raise_for_status()
+            break
+
+        if response is None:
+            raise RuntimeError("LLM file-mode request failed before receiving a response.")
+
+        body = response.json()
+        content = ""
+        maybe_output_text = body.get("output_text")
+        if isinstance(maybe_output_text, str):
+            content = maybe_output_text.strip()
+        if not content:
+            output_items = body.get("output", [])
+            if isinstance(output_items, list):
+                parts: list[str] = []
+                for item in output_items:
+                    if not isinstance(item, dict) or item.get("type") != "message":
+                        continue
+                    for content_item in item.get("content", []):
+                        if not isinstance(content_item, dict):
+                            continue
+                        if content_item.get("type") in {"output_text", "text"}:
+                            text = content_item.get("text")
+                            if isinstance(text, str) and text.strip():
+                                parts.append(text.strip())
+                if parts:
+                    content = "\n".join(parts).strip()
+
+        if not content:
+            raise RuntimeError(f"LLM file-mode returned empty content: {body}")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"LLM file-mode did not return valid JSON: {content[:500]}") from exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"Expected JSON object from file-mode, got: {type(parsed)}")
+        return parsed
+    finally:
+        _delete_transcript_file(api_base_url, headers, file_id)
 
 
 def _compact_analysis(item: dict) -> dict:
@@ -477,6 +693,7 @@ def _analyze_chunk_resilient(
 
 def _single_pass_playbook(
     endpoint: str,
+    api_base_url: str,
     headers: dict[str, str],
     model: str,
     transcript_text: str,
@@ -487,17 +704,29 @@ def _single_pass_playbook(
         f"Transcript:\n{transcript_text}\n\n"
         "Produce the JSON now."
     )
-    parsed = _chat_json(
-        endpoint=endpoint,
-        headers=headers,
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.2,
-        timeout_seconds=240,
-    )
+    try:
+        parsed = _chat_json(
+            endpoint=endpoint,
+            headers=headers,
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            timeout_seconds=240,
+        )
+    except _PayloadTooLargeError:
+        # Keep one-pass generation semantics by switching to file input instead of transcript chunking.
+        parsed = _chat_json_with_file(
+            endpoint=endpoint,
+            api_base_url=api_base_url,
+            headers=headers,
+            model=model,
+            source_url=source_url,
+            transcript_text=transcript_text,
+            timeout_seconds=300,
+        )
     return _normalize_payload(parsed)
 
 
@@ -544,42 +773,24 @@ def _chunked_playbook(
 
 
 def generate_playbook(transcript_text: str, source_url: str = "", duration_seconds: int | None = None) -> dict:
-    api_key = os.getenv("GROQ_API_KEY")
-    groq_base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-    groq_llm_model = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
-    chunk_chars = int(os.getenv("BRAIN_TRANSCRIPT_CHUNK_CHARS", "18000"))
-    max_chunks = int(os.getenv("BRAIN_MAX_CHUNKS", "200"))
-    merge_batch_size = int(os.getenv("BRAIN_MERGE_BATCH_SIZE", "4"))
-    min_chunk_chars = int(os.getenv("BRAIN_MIN_CHUNK_CHARS", "4000"))
-    long_video_seconds = int(os.getenv("BRAIN_LONG_VIDEO_SECONDS", "3600"))
+    _ = duration_seconds  # Reserved for future quality heuristics.
+    api_key = os.getenv("OPENAI_API_KEY")
+    openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    openai_model = os.getenv("OPENAI_MODEL", "gpt-5")
 
     if not api_key:
-        raise RuntimeError("Missing GROQ_API_KEY")
+        raise RuntimeError("Missing OPENAI_API_KEY")
     if not transcript_text.strip():
         raise RuntimeError("Transcript is empty")
 
-    endpoint = f"{groq_base_url.rstrip('/')}/chat/completions"
+    endpoint = f"{openai_base_url.rstrip('/')}/responses"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    effective_duration = duration_seconds if isinstance(duration_seconds, int) and duration_seconds > 0 else None
-    if effective_duration is None:
-        effective_duration = _estimate_duration_seconds_from_transcript(transcript_text)
-    long_video_mode = effective_duration > long_video_seconds
-
-    if len(transcript_text) <= chunk_chars:
-        try:
-            return _single_pass_playbook(endpoint, headers, groq_llm_model, transcript_text, source_url)
-        except _PayloadTooLargeError:
-            pass
-    return _chunked_playbook(
+    return _single_pass_playbook(
         endpoint=endpoint,
+        api_base_url=openai_base_url,
         headers=headers,
-        model=groq_llm_model,
         transcript_text=transcript_text,
+        model=openai_model,
         source_url=source_url,
-        chunk_chars=chunk_chars,
-        max_chunks=max_chunks,
-        merge_batch_size=merge_batch_size,
-        min_chunk_chars=min_chunk_chars,
-        long_video_mode=long_video_mode,
     )

@@ -12,7 +12,7 @@ from extractors import extract_transcript
 from publisher import publish_playbook
 
 REQUIRED_ENV_VARS = [
-    "GROQ_API_KEY",
+    "OPENAI_API_KEY",
     "NOTION_TOKEN",
     "NOTION_DB_ID",
     "SHEET_ID",
