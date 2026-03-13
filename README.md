@@ -47,9 +47,12 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `APIFY_TOKEN` (required when `INSTAGRAM_EXTRACTOR_PROVIDER=apify`)
 - `APIFY_INSTAGRAM_ACTOR_ID` (default: `apify~instagram-reel-scraper`)
 - `APIFY_INSTAGRAM_INPUT_MODE` (default: `auto`; options: `auto`, `username`, `urls`, `startUrls`, `directUrls`)
+- `APIFY_INSTAGRAM_INCLUDE_TRANSCRIPT` (default: `true`; requests actor transcript output explicitly)
 - `APIFY_INSTAGRAM_EXTRA_INPUT_JSON` (optional JSON object merged into the actor input)
 - `APIFY_INSTAGRAM_TIMEOUT_SECONDS` (default: `300`)
 - `INSTAGRAM_APIFY_FALLBACK_TO_YTDLP` (default: `false`)
+- `INSTAGRAM_TRANSCRIPT_ONLY` (default: `false`; when `true`, Instagram processing fails fast if actor returns no transcript text and skips media transcription fallback)
+- `APIFY_INSTAGRAM_TRANSCRIPT_ONLY` (optional alias of `INSTAGRAM_TRANSCRIPT_ONLY`; takes precedence when set)
 - `YTDLP_COOKIES_FILE` (optional; path to exported Netscape cookies file)
 - `YTDLP_COOKIES_FROM_BROWSER` (optional; e.g. `chrome`, `brave`, `firefox`, `safari`)
 - `YOUTUBE_CAPTION_FALLBACK_ENABLED` (default: `false`; enables `yt-dlp` caption fallback for YouTube)
@@ -63,7 +66,9 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - Instagram defaults to API-based extraction (`INSTAGRAM_EXTRACTOR_PROVIDER=apify`) to avoid cookie/login issues.
 - Recommended IG actor for reel URLs: `apify~instagram-reel-scraper`.
 - `apify~instagram-reel-scraper` requires `input.username`; this pipeline sends the reel URL in that field.
-- If actor output already includes `transcript`, pipeline uses it directly; otherwise it downloads media URL and transcribes with Whisper.
+- `apify~instagram-reel-scraper` has `includeTranscript=false` by default in actor schema; this pipeline sets it to `true` unless overridden.
+- If actor output still has no `transcript`, pipeline downloads media URL and transcribes with Whisper (unless transcript-only mode is enabled).
+- To run IG in strict no-backup mode, set `APIFY_INSTAGRAM_TRANSCRIPT_ONLY=true` (or `INSTAGRAM_TRANSCRIPT_ONLY=true`).
 - YouTube extraction order is:
   1) TranscriptAPI (if `TRANSCRIPT_API_KEY` is set)
   2) `youtube-transcript-api`

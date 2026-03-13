@@ -347,6 +347,14 @@ def _build_apify_instagram_input(instagram_url: str, actor_id: str) -> dict:
             f"'{mode}'. Use one of: auto, username, urls, startUrls, directUrls."
         )
 
+    # Official apify/instagram-reel-scraper input schema has includeTranscript=false by default.
+    # Request transcript explicitly so pipeline does not unexpectedly fall back to media transcription.
+    include_transcript_raw = os.getenv("APIFY_INSTAGRAM_INCLUDE_TRANSCRIPT", "true")
+    input_payload.setdefault(
+        "includeTranscript",
+        include_transcript_raw.strip().lower() in {"1", "true", "yes"},
+    )
+
     extra_input_raw = os.getenv("APIFY_INSTAGRAM_EXTRA_INPUT_JSON", "").strip()
     if extra_input_raw:
         try:
@@ -372,13 +380,13 @@ def _run_instagram_apify_actor(instagram_url: str) -> dict:
 
     endpoint = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
     params = {
-        "token": token,
         "format": "json",
         "clean": "1",
     }
+    headers = {"Authorization": f"Bearer {token}"}
     run_input = _build_apify_instagram_input(instagram_url, actor_id=actor_id)
 
-    response = requests.post(endpoint, params=params, json=run_input, timeout=timeout_seconds)
+    response = requests.post(endpoint, params=params, headers=headers, json=run_input, timeout=timeout_seconds)
     if not response.ok:
         details = response.text[:500]
         if response.status_code == 400 and "input.username" in details:
@@ -459,8 +467,12 @@ class _GroqUploadTooLarge(RuntimeError):
 def _run_ffmpeg(args: list[str]) -> None:
     completed = subprocess.run(args, capture_output=True, text=True)
     if completed.returncode != 0:
-        stderr = (completed.stderr or "").strip()[:500]
-        raise RuntimeError(f"ffmpeg failed: {stderr}")
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        details_source = stderr or stdout or "No ffmpeg output captured."
+        lines = details_source.splitlines()
+        tail = "\n".join(lines[-25:])
+        raise RuntimeError(f"ffmpeg failed (exit {completed.returncode}): {tail[:2000]}")
 
 
 def _compress_audio_for_groq(input_path: str) -> str:
@@ -472,6 +484,9 @@ def _compress_audio_for_groq(input_path: str) -> str:
     _run_ffmpeg(
         [
             ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             input_path,
@@ -488,6 +503,18 @@ def _compress_audio_for_groq(input_path: str) -> str:
     return output_path
 
 
+def _list_chunk_files(chunk_dir: Path) -> list[str]:
+    return sorted(str(path) for path in chunk_dir.glob("chunk_*.mp3") if path.is_file() and path.stat().st_size > 0)
+
+
+def _clear_chunk_files(chunk_dir: Path) -> None:
+    for path in chunk_dir.glob("chunk_*.mp3"):
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
 def _split_audio_for_groq(input_path: str, chunk_seconds: int = 900) -> list[str]:
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
@@ -497,25 +524,65 @@ def _split_audio_for_groq(input_path: str, chunk_seconds: int = 900) -> list[str
     chunk_dir.mkdir(parents=True, exist_ok=True)
     pattern = str(chunk_dir / "chunk_%03d.mp3")
 
+    _clear_chunk_files(chunk_dir)
+    try:
+        # Fast path: split without re-encoding.
+        _run_ffmpeg(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                input_path,
+                "-f",
+                "segment",
+                "-segment_time",
+                str(chunk_seconds),
+                "-c",
+                "copy",
+                pattern,
+            ]
+        )
+    except RuntimeError:
+        pass
+
+    chunks = _list_chunk_files(chunk_dir)
+    if chunks:
+        return chunks
+
+    # Fallback: segment while re-encoding for sources that fail in copy mode.
+    _clear_chunk_files(chunk_dir)
     _run_ffmpeg(
         [
             ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             input_path,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-b:a",
+            "24k",
             "-f",
             "segment",
             "-segment_time",
             str(chunk_seconds),
-            "-c",
-            "copy",
+            "-reset_timestamps",
+            "1",
             pattern,
         ]
     )
 
-    chunks = sorted(str(path) for path in chunk_dir.glob("chunk_*.mp3"))
+    chunks = _list_chunk_files(chunk_dir)
     if not chunks:
-        raise RuntimeError("Failed to create audio chunks for large-file transcription.")
+        raise RuntimeError("Failed to create non-empty audio chunks for large-file transcription.")
     return chunks
 
 
@@ -637,6 +704,15 @@ def extract_instagram_transcript(instagram_url: str) -> str:
         "true",
         "yes",
     }
+    transcript_only_raw = os.getenv(
+        "APIFY_INSTAGRAM_TRANSCRIPT_ONLY",
+        os.getenv("INSTAGRAM_TRANSCRIPT_ONLY", "false"),
+    )
+    transcript_only_mode = transcript_only_raw.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
     if provider == "yt-dlp":
         return extract_media_transcript(instagram_url)
@@ -649,6 +725,19 @@ def extract_instagram_transcript(instagram_url: str) -> str:
             actor_transcript = _extract_transcript_from_apify_item(actor_item)
             if actor_transcript:
                 return actor_transcript
+            if transcript_only_mode:
+                raise RuntimeError(
+                    "Apify actor returned no transcript text. "
+                    "Set APIFY_INSTAGRAM_INCLUDE_TRANSCRIPT=true (or pass includeTranscript=true in "
+                    "APIFY_INSTAGRAM_EXTRA_INPUT_JSON) "
+                    "or disable INSTAGRAM_TRANSCRIPT_ONLY."
+                )
+            if use_groq_whisper and not os.getenv("GROQ_API_KEY", "").strip():
+                raise RuntimeError(
+                    "Apify actor returned no transcript text, and media fallback is configured to use Groq Whisper "
+                    "but GROQ_API_KEY is missing. Set INSTAGRAM_TRANSCRIPT_ONLY=true for no-fallback mode, or set "
+                    "GROQ_API_KEY to allow media transcription."
+                )
 
             media_path, temp_dir = _download_instagram_media_with_apify(instagram_url, actor_item=actor_item)
             if use_groq_whisper:
