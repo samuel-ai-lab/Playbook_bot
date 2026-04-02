@@ -9,6 +9,14 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import requests
 
 
+def _env_truthy(value: str | None) -> bool:
+    return isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}
+
+
+def _env_falsey(value: str | None) -> bool:
+    return isinstance(value, str) and value.strip().lower() in {"0", "false", "no"}
+
+
 def _normalize_source_url(source_url: str) -> str:
     parsed = urlparse(source_url)
     if "instagram.com" in parsed.netloc:
@@ -704,25 +712,16 @@ def extract_instagram_transcript(instagram_url: str) -> str:
         "true",
         "yes",
     }
-    transcript_only_raw = os.getenv(
-        "APIFY_INSTAGRAM_TRANSCRIPT_ONLY",
-        os.getenv("INSTAGRAM_TRANSCRIPT_ONLY", "false"),
-    )
-    transcript_only_mode = transcript_only_raw.strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    print(
-        "Instagram transcript mode debug:",
-        {
-            "APIFY_INSTAGRAM_TRANSCRIPT_ONLY": os.getenv("APIFY_INSTAGRAM_TRANSCRIPT_ONLY"),
-            "INSTAGRAM_TRANSCRIPT_ONLY": os.getenv("INSTAGRAM_TRANSCRIPT_ONLY"),
-            "transcript_only_raw": transcript_only_raw,
-            "transcript_only_mode": transcript_only_mode,
-            "USE_GROQ_WHISPER": os.getenv("USE_GROQ_WHISPER"),
-        },
-    )
+    transcript_only_values = [
+        os.getenv("APIFY_INSTAGRAM_TRANSCRIPT_ONLY"),
+        os.getenv("INSTAGRAM_TRANSCRIPT_ONLY"),
+    ]
+    if any(_env_falsey(value) for value in transcript_only_values):
+        transcript_only_mode = False
+    elif any(_env_truthy(value) for value in transcript_only_values):
+        transcript_only_mode = True
+    else:
+        transcript_only_mode = False
 
     if provider == "yt-dlp":
         return extract_media_transcript(instagram_url)
