@@ -713,6 +713,16 @@ def extract_instagram_transcript(instagram_url: str) -> str:
         "true",
         "yes",
     }
+    print(
+        "Instagram transcript mode debug:",
+        {
+            "APIFY_INSTAGRAM_TRANSCRIPT_ONLY": os.getenv("APIFY_INSTAGRAM_TRANSCRIPT_ONLY"),
+            "INSTAGRAM_TRANSCRIPT_ONLY": os.getenv("INSTAGRAM_TRANSCRIPT_ONLY"),
+            "transcript_only_raw": transcript_only_raw,
+            "transcript_only_mode": transcript_only_mode,
+            "USE_GROQ_WHISPER": os.getenv("USE_GROQ_WHISPER"),
+        },
+    )
 
     if provider == "yt-dlp":
         return extract_media_transcript(instagram_url)
