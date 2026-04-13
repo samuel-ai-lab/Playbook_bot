@@ -27,8 +27,44 @@ def _paragraph_block(text: str) -> dict[str, Any]:
     }
 
 
-def _split_paragraph_chunks(text: str, max_len: int = 1700) -> list[str]:
+def _normalize_inline_lists(text: str) -> str:
     cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+
+    patterns = [
+        (r"(?<=:)\s+([A-Z][^:;\n]{0,120}?)(?:,\s+|\s+and\s+)", "\n- "),
+    ]
+
+    normalized = cleaned
+    for pattern, replacement in patterns:
+        normalized = re.sub(pattern, replacement, normalized)
+
+    return normalized
+
+
+def _split_long_paragraph(part: str, target_sentences: int = 3) -> list[str]:
+    sentence_pattern = r"(?<=[.!?])\s+(?=[A-Z0-9\"'])"
+    sentences = [item.strip() for item in re.split(sentence_pattern, part) if item.strip()]
+    if len(sentences) <= target_sentences:
+        return [part.strip()]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    for sentence in sentences:
+        current.append(sentence)
+        if len(current) >= target_sentences:
+            chunks.append(" ".join(current).strip())
+            current = []
+
+    if current:
+        chunks.append(" ".join(current).strip())
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def _split_paragraph_chunks(text: str, max_len: int = 1700) -> list[str]:
+    cleaned = _normalize_inline_lists(text)
     if not cleaned:
         return []
 
@@ -38,20 +74,60 @@ def _split_paragraph_chunks(text: str, max_len: int = 1700) -> list[str]:
 
     chunks: list[str] = []
     for part in parts:
-        remaining = part
-        while len(remaining) > max_len:
-            split_at = remaining.rfind(". ", 0, max_len)
-            if split_at < int(max_len * 0.5):
-                split_at = remaining.rfind(" ", 0, max_len)
-            if split_at <= 0:
-                split_at = max_len
-            chunk = remaining[:split_at].strip()
-            if chunk:
-                chunks.append(chunk)
-            remaining = remaining[split_at:].strip()
-        if remaining:
-            chunks.append(remaining)
+        subparts = [item.strip() for item in part.split("\n") if item.strip()]
+        if not subparts:
+            subparts = [part]
+
+        expanded: list[str] = []
+        for subpart in subparts:
+            expanded.extend(_split_long_paragraph(subpart))
+
+        for expanded_part in expanded:
+            remaining = expanded_part
+            while len(remaining) > max_len:
+                split_at = remaining.rfind(". ", 0, max_len)
+                if split_at < int(max_len * 0.5):
+                    split_at = remaining.rfind(" ", 0, max_len)
+                if split_at <= 0:
+                    split_at = max_len
+                chunk = remaining[:split_at].strip()
+                if chunk:
+                    chunks.append(chunk)
+                remaining = remaining[split_at:].strip()
+            if remaining:
+                chunks.append(remaining)
     return chunks
+
+
+def _content_blocks(text: str) -> list[dict[str, Any]]:
+    cleaned = _normalize_inline_lists(text)
+    if not cleaned:
+        return []
+
+    blocks: list[dict[str, Any]] = []
+    parts = [part.strip() for part in re.split(r"\n{2,}", cleaned) if part.strip()]
+    if not parts:
+        parts = [cleaned]
+
+    for part in parts:
+        lines = [line.strip() for line in part.split("\n") if line.strip()]
+        if not lines:
+            continue
+
+        paragraph_buffer: list[str] = []
+        for line in lines:
+            if line.startswith("- "):
+                if paragraph_buffer:
+                    blocks.extend(_paragraph_blocks("\n".join(paragraph_buffer)))
+                    paragraph_buffer = []
+                blocks.append(_bulleted_block(line[2:].strip()))
+            else:
+                paragraph_buffer.append(line)
+
+        if paragraph_buffer:
+            blocks.extend(_paragraph_blocks("\n".join(paragraph_buffer)))
+
+    return blocks
 
 
 def _paragraph_blocks(text: str) -> list[dict[str, Any]]:
@@ -98,7 +174,7 @@ def _build_blocks(playbook: dict, source_url: str = "") -> list[dict[str, Any]]:
 
     if introduction:
         blocks.append(_heading_block("Overview", level=2))
-        blocks.extend(_paragraph_blocks(introduction))
+        blocks.extend(_content_blocks(introduction))
 
     sections = playbook.get("sections", [])
     if not isinstance(sections, list):
@@ -125,12 +201,11 @@ def _build_blocks(playbook: dict, source_url: str = "") -> list[dict[str, Any]]:
 
         blocks.append(_heading_block(heading, level=2))
         if content:
-            blocks.extend(_paragraph_blocks(content))
+            blocks.extend(_content_blocks(content))
 
         if isinstance(notes_pack, list):
             notes = [str(note).strip() for note in notes_pack if str(note).strip()]
             if notes:
-                blocks.append(_heading_block("Notes Pack", level=3))
                 for note in notes:
                     blocks.append(_bulleted_block(note))
 
@@ -145,7 +220,7 @@ def _build_blocks(playbook: dict, source_url: str = "") -> list[dict[str, Any]]:
     conclusion = str(playbook.get("conclusion", "")).strip()
     if conclusion:
         blocks.append(_heading_block("Conclusion", level=2))
-        blocks.extend(_paragraph_blocks(conclusion))
+        blocks.extend(_content_blocks(conclusion))
 
     tags_raw = playbook.get("tags", [])
     tags = [str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else []
