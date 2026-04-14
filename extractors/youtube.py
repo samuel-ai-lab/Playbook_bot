@@ -60,6 +60,11 @@ def _parse_transcriptapi_payload(payload: dict) -> str:
     return ""
 
 
+def _normalize_youtube_url_for_transcriptapi(video_url: str) -> str:
+    video_id = parse_youtube_id(video_url)
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
 def extract_youtube_transcript_with_transcriptapi(video_url: str) -> str:
     api_key = os.getenv("TRANSCRIPT_API_KEY", "").strip()
     if not api_key:
@@ -72,8 +77,9 @@ def extract_youtube_transcript_with_transcriptapi(video_url: str) -> str:
 
     endpoint = f"{base_url.rstrip('/')}/api/v2/youtube/transcript"
     headers = {"Authorization": f"Bearer {api_key}"}
+    normalized_video_url = _normalize_youtube_url_for_transcriptapi(video_url)
     params = {
-        "video_url": video_url,
+        "video_url": normalized_video_url,
         "format": "json",
         "include_timestamp": "false",
     }
