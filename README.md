@@ -1,6 +1,6 @@
 # Playbook Factory
 
-Automates extraction of transcripts from YouTube/Instagram and publishes longform playbooks to Notion.
+Automates extraction of transcripts from YouTube/Instagram/TikTok and publishes longform playbooks to Notion.
 
 ## Configuration (.env)
 
@@ -53,6 +53,15 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `INSTAGRAM_APIFY_FALLBACK_TO_YTDLP` (default: `false`)
 - `INSTAGRAM_TRANSCRIPT_ONLY` (default: `false`; when `true`, Instagram processing fails fast if actor returns no transcript text and skips media transcription fallback)
 - `APIFY_INSTAGRAM_TRANSCRIPT_ONLY` (optional alias of `INSTAGRAM_TRANSCRIPT_ONLY`; takes precedence when set)
+- `TIKTOK_EXTRACTOR_PROVIDER` (default: `apify`; current supported option: `apify`)
+- `APIFY_TIKTOK_TRANSCRIPT_ACTOR_ID` (default: `scrape-creators~best-tiktok-transcripts-scraper`)
+- `APIFY_TIKTOK_EXTRA_INPUT_JSON` (optional JSON object merged into the primary TikTok transcript actor input)
+- `APIFY_TIKTOK_FALLBACK_ACTOR_ID` (default: `clockworks~tiktok-scraper`)
+- `APIFY_TIKTOK_FALLBACK_EXTRA_INPUT_JSON` (optional JSON object merged into the secondary TikTok fallback actor input)
+- `APIFY_TIKTOK_FALLBACK_DOWNLOAD_SUBTITLES_OPTIONS` (default: `DOWNLOAD_AND_TRANSCRIBE_VIDEOS_WITHOUT_SUBTITLES`)
+- `APIFY_TIKTOK_TIMEOUT_SECONDS` (default: `300`)
+- `TIKTOK_TRANSCRIPT_ONLY` (default: `false`; when `true`, TikTok processing fails fast if both Apify actors return no transcript text and skips media transcription fallback)
+- `APIFY_TIKTOK_TRANSCRIPT_ONLY` (optional alias of `TIKTOK_TRANSCRIPT_ONLY`)
 - `YTDLP_COOKIES_FILE` (optional; path to exported Netscape cookies file)
 - `YTDLP_COOKIES_FROM_BROWSER` (optional; e.g. `chrome`, `brave`, `firefox`, `safari`)
 - `YOUTUBE_CAPTION_FALLBACK_ENABLED` (default: `false`; enables `yt-dlp` caption fallback for YouTube)
@@ -69,6 +78,13 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `apify~instagram-reel-scraper` has `includeTranscript=false` by default in actor schema; this pipeline sets it to `true` unless overridden.
 - If actor output still has no `transcript`, pipeline downloads media URL and transcribes with Whisper (unless transcript-only mode is enabled).
 - To run IG in strict no-backup mode, set `APIFY_INSTAGRAM_TRANSCRIPT_ONLY=true` (or `INSTAGRAM_TRANSCRIPT_ONLY=true`).
+- TikTok defaults to API-based extraction (`TIKTOK_EXTRACTOR_PROVIDER=apify`).
+- TikTok extraction order is:
+  1) `scrape-creators/best-tiktok-transcripts-scraper`
+  2) `clockworks/tiktok-scraper` with `DOWNLOAD_AND_TRANSCRIBE_VIDEOS_WITHOUT_SUBTITLES`
+  3) media download from the fallback actor + Whisper transcription
+- The primary TikTok transcript actor returns WEBVTT-style transcript text; this pipeline normalizes it to plain text before playbook generation.
+- To run TikTok in strict no-backup mode, set `TIKTOK_TRANSCRIPT_ONLY=true` (or `APIFY_TIKTOK_TRANSCRIPT_ONLY=true`).
 - YouTube extraction order is:
   1) TranscriptAPI (if `TRANSCRIPT_API_KEY` is set)
   2) `youtube-transcript-api`

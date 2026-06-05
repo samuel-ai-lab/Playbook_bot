@@ -1,6 +1,7 @@
 import os
 
 from .instagram import extract_instagram_transcript, extract_media_transcript
+from .tiktok import extract_tiktok_transcript
 from .youtube import (
     extract_youtube_duration_seconds,
     extract_youtube_transcript,
@@ -79,5 +80,9 @@ def extract_transcript(url: str) -> tuple[str, dict]:
     if "instagram.com" in lowered:
         transcript = extract_instagram_transcript(url)
         return transcript, {"source": "instagram"}
+
+    if "tiktok.com" in lowered:
+        transcript = extract_tiktok_transcript(url)
+        return transcript, {"source": "tiktok"}
 
     raise ValueError(f"Unsupported URL: {url}")
