@@ -142,3 +142,4 @@ Recommended extra columns:
 - `Tags`
 
 Rows with `Status = New` will be processed.
+If a sheet-provided tag does not already exist in the Notion `Tags` multi-select property, the bot will add that option to the database schema before creating the page.

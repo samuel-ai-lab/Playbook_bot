@@ -90,6 +90,12 @@ def _headers(worksheet: gspread.Worksheet) -> dict[str, int]:
 
 def _cell_value(row: dict[str, Any], key: str) -> str:
     value = row.get(key, "")
+    if value == "" and key not in row:
+        normalized_key = key.strip().lower()
+        for row_key, row_value in row.items():
+            if str(row_key).strip().lower() == normalized_key:
+                value = row_value
+                break
     return str(value).strip() if value is not None else ""
 
 
@@ -164,6 +170,8 @@ def _process_row(
     )
 
     sheet_tags = _parse_sheet_tags(_cell_value(row, TAGS_COL))
+    if not sheet_tags and TAGS_COL.strip().lower() == "tags":
+        sheet_tags = _parse_sheet_tags(_cell_value(row, "Tag"))
     if sheet_tags:
         playbook["tags"] = sheet_tags
 

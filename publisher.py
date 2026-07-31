@@ -265,10 +265,62 @@ def _find_tags_property(db_schema: dict[str, Any]) -> tuple[str, str] | None:
 
     for name, metadata in db_schema.items():
         property_type = metadata.get("type")
+        if property_type not in {"multi_select", "select"}:
+            continue
+        if "tag" in name.strip().lower():
+            return name, property_type
+
+    for name, metadata in db_schema.items():
+        property_type = metadata.get("type")
         if property_type in {"multi_select", "select"}:
             return name, property_type
 
     return None
+
+
+def _ensure_multi_select_options(
+    notion: Client,
+    db_id: str,
+    db_schema: dict[str, Any],
+    property_name: str,
+    tags: list[str],
+) -> dict[str, Any]:
+    property_meta = db_schema.get(property_name, {})
+    multi_select_meta = property_meta.get("multi_select", {}) if isinstance(property_meta, dict) else {}
+    options = multi_select_meta.get("options", []) if isinstance(multi_select_meta, dict) else []
+
+    existing_by_name = {
+        str(option.get("name", "")).strip().lower(): option
+        for option in options
+        if isinstance(option, dict) and str(option.get("name", "")).strip()
+    }
+    missing_tags = [tag for tag in tags if tag.lower() not in existing_by_name]
+    if not missing_tags:
+        return db_schema
+
+    preserved_options: list[dict[str, Any]] = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_id = str(option.get("id", "")).strip()
+        option_name = str(option.get("name", "")).strip()
+        if option_id:
+            preserved_options.append({"id": option_id, "name": option_name} if option_name else {"id": option_id})
+        elif option_name:
+            preserved_options.append({"name": option_name})
+
+    new_options = [{"name": _truncate_text(tag, 100)} for tag in missing_tags]
+    updated_db = notion.databases.update(
+        database_id=db_id,
+        properties={
+            property_name: {
+                "multi_select": {
+                    "options": preserved_options + new_options,
+                }
+            }
+        },
+    )
+    return updated_db.get("properties", {}) if isinstance(updated_db, dict) else db_schema
 
 
 def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) -> dict[str, Any]:
@@ -294,6 +346,7 @@ def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) ->
     if tags_prop and tags:
         tags_prop_name, tags_prop_type = tags_prop
         if tags_prop_type == "multi_select":
+            db_schema = _ensure_multi_select_options(notion, db_id, db_schema, tags_prop_name, tags)
             properties[tags_prop_name] = {"multi_select": [{"name": _truncate_text(tag, 100)} for tag in tags]}
         elif tags_prop_type == "select":
             properties[tags_prop_name] = {"select": {"name": _truncate_text(tags[0], 100)}}
