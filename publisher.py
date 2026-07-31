@@ -253,10 +253,21 @@ def _title_property_name(db_schema: dict[str, Any]) -> str:
     return "Name"
 
 
-def _find_multi_select_name(db_schema: dict[str, Any]) -> str | None:
+def _find_tags_property(db_schema: dict[str, Any]) -> tuple[str, str] | None:
+    preferred_name = os.getenv("NOTION_TAGS_PROP", "Tags").strip() or "Tags"
+
     for name, metadata in db_schema.items():
-        if metadata.get("type") == "multi_select":
-            return name
+        if name.strip().lower() != preferred_name.lower():
+            continue
+        property_type = metadata.get("type")
+        if property_type in {"multi_select", "select"}:
+            return name, property_type
+
+    for name, metadata in db_schema.items():
+        property_type = metadata.get("type")
+        if property_type in {"multi_select", "select"}:
+            return name, property_type
+
     return None
 
 
@@ -276,12 +287,16 @@ def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) ->
         }
     }
 
-    tags_prop = _find_multi_select_name(db_schema)
+    tags_prop = _find_tags_property(db_schema)
     tags_raw = playbook.get("tags", [])
     tags = [str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else []
     tags = [tag for tag in tags if tag]
     if tags_prop and tags:
-        properties[tags_prop] = {"multi_select": [{"name": _truncate_text(tag, 100)} for tag in tags]}
+        tags_prop_name, tags_prop_type = tags_prop
+        if tags_prop_type == "multi_select":
+            properties[tags_prop_name] = {"multi_select": [{"name": _truncate_text(tag, 100)} for tag in tags]}
+        elif tags_prop_type == "select":
+            properties[tags_prop_name] = {"select": {"name": _truncate_text(tags[0], 100)}}
 
     return properties
 

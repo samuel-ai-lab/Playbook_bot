@@ -11,6 +11,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `OPENAI_API_KEY`
 - `NOTION_TOKEN`
 - `NOTION_DB_ID` (database where each generated playbook is created as a page item)
+- `NOTION_TAGS_PROP` (optional; default: `Tags`; name of the Notion `select`/`multi_select` property to populate from playbook tags)
 - `G_SHEETS_JSON` (stringified Google service account JSON)
   or `G_SHEETS_JSON_B64` (base64-encoded service account JSON)
 - `SHEET_ID`
