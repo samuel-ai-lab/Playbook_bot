@@ -28,6 +28,7 @@ URL_COL = os.getenv("SHEET_URL_COL", "URL")
 NOTION_URL_COL = os.getenv("SHEET_NOTION_URL_COL", "Notion URL")
 TITLE_COL = os.getenv("SHEET_TITLE_COL", "Notion Title")
 ERROR_COL = os.getenv("SHEET_ERROR_COL", "Error")
+TAGS_COL = os.getenv("SHEET_TAGS_COL", "Tags")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "")
 
 
@@ -104,6 +105,28 @@ def _update_if_present(
         worksheet.update_cell(row_number, col_index, value)
 
 
+def _parse_sheet_tags(raw_value: str) -> list[str]:
+    raw = (raw_value or "").strip()
+    if not raw:
+        return []
+
+    normalized = raw.replace("\n", ",").replace(";", ",").replace("|", ",")
+    tags: list[str] = []
+    seen: set[str] = set()
+
+    for part in normalized.split(","):
+        tag = part.strip()
+        if not tag:
+            continue
+        dedupe_key = tag.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        tags.append(tag)
+
+    return tags
+
+
 def _new_rows(worksheet: gspread.Worksheet, header_map: dict[str, int]) -> list[tuple[int, dict[str, Any]]]:
     records = worksheet.get_all_records(default_blank="")
     rows: list[tuple[int, dict[str, Any]]] = []
@@ -139,6 +162,10 @@ def _process_row(
         source_url=source_url,
         duration_seconds=metadata.get("duration_seconds"),
     )
+
+    sheet_tags = _parse_sheet_tags(_cell_value(row, TAGS_COL))
+    if sheet_tags:
+        playbook["tags"] = sheet_tags
 
     title = playbook.get("title", "").strip()
     if not title:

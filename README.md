@@ -23,6 +23,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `SHEET_NOTION_URL_COL` (default: `Notion URL`)
 - `SHEET_TITLE_COL` (default: `Notion Title`)
 - `SHEET_ERROR_COL` (default: `Error`)
+- `SHEET_TAGS_COL` (default: `Tags`; when populated, overrides the generated playbook tags and writes them into the Notion Tags property)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_MODEL` (default: `gpt-5`)
 - `OPENAI_MAX_OUTPUT_TOKENS` (default: `32000`)
@@ -137,5 +138,6 @@ Recommended extra columns:
 - `Notion URL`
 - `Notion Title`
 - `Error`
+- `Tags`
 
 Rows with `Status = New` will be processed.
