@@ -24,7 +24,7 @@ Create a `.env` file in the project root (you can copy `.env.example`).
 - `SHEET_NOTION_URL_COL` (default: `Notion URL`)
 - `SHEET_TITLE_COL` (default: `Notion Title`)
 - `SHEET_ERROR_COL` (default: `Error`)
-- `SHEET_TAGS_COL` (default: `Tags`; when populated, overrides the generated playbook tags and writes them into the Notion Tags property)
+- `SHEET_TAGS_COL` (default: `Tags`; when populated, writes those values into the Notion Tags property)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_MODEL` (default: `gpt-5`)
 - `OPENAI_MAX_OUTPUT_TOKENS` (default: `32000`)
@@ -142,4 +142,4 @@ Recommended extra columns:
 - `Tags`
 
 Rows with `Status = New` will be processed.
-If a sheet-provided tag does not already exist in the Notion `Tags` multi-select property, the bot will add that option to the database schema before creating the page.
+If a sheet-provided tag does not already exist in the Notion `Tags` multi-select property, the bot will add that option to the database schema before creating the page. AI-generated playbook tags no longer mutate the Notion `Tags` property.

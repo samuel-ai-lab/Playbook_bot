@@ -172,15 +172,13 @@ def _process_row(
     sheet_tags = _parse_sheet_tags(_cell_value(row, TAGS_COL))
     if not sheet_tags and TAGS_COL.strip().lower() == "tags":
         sheet_tags = _parse_sheet_tags(_cell_value(row, "Tag"))
-    if sheet_tags:
-        playbook["tags"] = sheet_tags
 
     title = playbook.get("title", "").strip()
     if not title:
         default_title = f"Playbook - {metadata.get('source', 'source').capitalize()}"
         playbook["title"] = default_title
 
-    notion_url = publish_playbook(playbook, source_url=source_url)
+    notion_url = publish_playbook(playbook, source_url=source_url, notion_tags=sheet_tags)
 
     _update_if_present(worksheet, header_map, row_number, STATUS_COL, STATUS_DONE)
     _update_if_present(worksheet, header_map, row_number, NOTION_URL_COL, notion_url)

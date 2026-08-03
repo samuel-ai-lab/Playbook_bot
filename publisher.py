@@ -323,7 +323,12 @@ def _ensure_multi_select_options(
     return updated_db.get("properties", {}) if isinstance(updated_db, dict) else db_schema
 
 
-def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) -> dict[str, Any]:
+def _page_properties_for_database(
+    notion: Client,
+    db_id: str,
+    playbook: dict,
+    notion_tags: list[str] | None = None,
+) -> dict[str, Any]:
     db = notion.databases.retrieve(database_id=db_id)
     db_schema = db.get("properties", {})
 
@@ -340,8 +345,8 @@ def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) ->
     }
 
     tags_prop = _find_tags_property(db_schema)
-    tags_raw = playbook.get("tags", [])
-    tags = [str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else []
+    tags_source = notion_tags if notion_tags is not None else []
+    tags = [str(tag).strip() for tag in tags_source] if isinstance(tags_source, list) else []
     tags = [tag for tag in tags if tag]
     if tags_prop and tags:
         tags_prop_name, tags_prop_type = tags_prop
@@ -354,7 +359,7 @@ def _page_properties_for_database(notion: Client, db_id: str, playbook: dict) ->
     return properties
 
 
-def publish_playbook(playbook: dict, source_url: str = "") -> str:
+def publish_playbook(playbook: dict, source_url: str = "", notion_tags: list[str] | None = None) -> str:
     notion_token = os.getenv("NOTION_TOKEN")
     notion_db_id = os.getenv("NOTION_DB_ID")
 
@@ -367,7 +372,7 @@ def publish_playbook(playbook: dict, source_url: str = "") -> str:
 
     page = notion.pages.create(
         parent={"database_id": notion_db_id},
-        properties=_page_properties_for_database(notion, notion_db_id, playbook),
+        properties=_page_properties_for_database(notion, notion_db_id, playbook, notion_tags=notion_tags),
     )
     page_id = page["id"]
 
